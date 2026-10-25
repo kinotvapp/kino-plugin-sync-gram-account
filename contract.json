@@ -1,8 +1,8 @@
 {
-  "$comment": "Kino plugin contract, apiVersion 1 to 13. The single source of truth for every number and rule a plugin meets. The app checks each value against its own code, and a test in the app pins this file to it; sdk/validate.mjs, sdk/run.mjs and the guide's tables read this file. apiVersionFromApp[\"13\"] (0.9.75) is PROVISIONAL: which Kino release first ships apiVersion 13 is not decided yet (12 is the sync-providers release, Kino 0.9.74).",
+  "$comment": "Kino plugin contract, apiVersion 1 to 13. The single source of truth for every number and rule a plugin meets. The app checks each value against its own code, and a test in the app pins this file to it; sdk/validate.mjs, sdk/run.mjs and the guide's tables read this file. apiVersion 12 (sync providers) and 13 both arrive in Kino 0.9.74, the next release (not published yet); a Kino before 0.9.74 refuses both.",
   "apiVersion": 13,
   "maxApiVersion": 13,
-  "apiVersionFromApp": { "6": "0.9.50", "7": "0.9.51", "8": "0.9.54", "9": "0.9.55", "10": "0.9.65", "11": "0.9.66", "12": "0.9.74", "13": "0.9.75" },
+  "apiVersionFromApp": { "6": "0.9.50", "7": "0.9.51", "8": "0.9.54", "9": "0.9.55", "10": "0.9.65", "11": "0.9.66", "12": "0.9.74", "13": "0.9.74" },
   "additiveFromApp": { "kino.meta": "0.9.53", "kino.tmdb": "0.9.53", "catalogOnly": "0.9.54", "kino.browser.captureAll": "0.9.54", "fetch.errorHost": "0.9.55", "kino.fetchAnyHost": "0.9.55",
     "kino.meta.byTitle": "0.9.55", "kino.device": "0.9.55", "kino.seed": "0.9.55", "panel.loading": "0.9.64", "kino.nuvio": "0.9.71", "kino.sync.remoteChanged": "0.9.74", "action.link": "0.9.74", "action.setSettings": "0.9.74" },
   "capabilities": {
