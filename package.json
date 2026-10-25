@@ -1,0 +1,12 @@
+{
+  "name": "kino-plugin-sync-gram-account",
+  "private": true,
+  "type": "module",
+  "description": "Kino plugin Sync-Gram Cuenta: sync your Kino devices through your own Telegram account, in Saved Messages (sync provider).",
+  "scripts": {
+    "build": "node scripts/build.mjs src/plugin.js plugin.js",
+    "test": "node scripts/build.mjs src/plugin.js plugin.js && node --test test/*.test.mjs",
+    "validate": "npm run build && node sdk/validate.mjs . --repo kinotvapp/kino-plugin-sync-gram-account",
+    "sign": "npm run build && node sdk/seal.mjs --sign --repo kinotvapp/kino-plugin-sync-gram-account --key ~/.config/kino/kino-author-key.pem"
+  }
+}

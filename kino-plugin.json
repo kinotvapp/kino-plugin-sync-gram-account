@@ -1,0 +1,241 @@
+{
+  "id": "sync-gram-account",
+  "name": "Sync-Gram Cuenta",
+  "version": "1.1.2",
+  "apiVersion": 13,
+  "entry": "plugin.js",
+  "description": "Sincroniza tus aparatos de Kino a través de tu propia cuenta de Telegram, sin bot: la copia queda fijada en tus Mensajes guardados. En el celular entras con tu número y un código; la TV recibe la configuración y muestra un código QR. No oficial: sin relación con Telegram. (Unofficial: not affiliated with Telegram.)",
+  "author": "Kino",
+  "homepage": "https://github.com/kinotvapp/kino-plugin-sync-gram-account",
+  "icon": "icon.png",
+  "hosts": [
+    "pluto.web.telegram.org",
+    "venus.web.telegram.org",
+    "aurora.web.telegram.org",
+    "vesta.web.telegram.org",
+    "flora.web.telegram.org"
+  ],
+  "capabilities": [
+    "syncProvider",
+    "socket",
+    "storageLarge"
+  ],
+  "settings": [
+    {
+      "key": "tg1",
+      "type": "section",
+      "label": "1. Abre my.telegram.org",
+      "labelEn": "1. Open my.telegram.org",
+      "hint": "Abre my.telegram.org e inicia sesión con tu número de teléfono.",
+      "hintEn": "Open my.telegram.org and sign in with your phone number.",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "mytelegram",
+      "type": "link",
+      "label": "Obtener api_id y api_hash",
+      "labelEn": "Get api_id and api_hash",
+      "url": "https://my.telegram.org/apps",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "tg2",
+      "type": "section",
+      "label": "2. Crea una app y copia los datos",
+      "labelEn": "2. Create an app and copy the data",
+      "hint": "En API development tools crea una app (cualquier nombre sirve) y copia api_id y api_hash. Pégalos aquí y toca Guardar.",
+      "hintEn": "In API development tools create an app (any name works) and copy api_id and api_hash. Paste them here and tap Save.",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "api_id",
+      "type": "password",
+      "label": "api_id",
+      "labelEn": "api_id",
+      "hint": "El número de tu app en my.telegram.org",
+      "hintEn": "Your app's number at my.telegram.org",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "api_hash",
+      "type": "password",
+      "label": "api_hash",
+      "labelEn": "api_hash",
+      "hint": "32 letras y números de tu app en my.telegram.org",
+      "hintEn": "32 letters and digits of your app at my.telegram.org",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "scope",
+      "type": "section",
+      "label": "Lo que guarda este aparato",
+      "labelEn": "What this device keeps",
+      "hint": "Este aparato guardará una sesión de toda tu cuenta de Telegram; tu sesión de Telegram no entra en las copias de seguridad. El plugin solo actúa en tus Mensajes guardados, pero esa sesión puede hacer más si el plugin o el aparato se ven comprometidos. Ciérrala en Telegram ▸ Ajustes ▸ Dispositivos.",
+      "hintEn": "This device will keep a session of your whole Telegram account; your Telegram session never goes into backups. The plugin only acts in your Saved Messages, but that session can do more if the plugin or the device is compromised. End it in Telegram ▸ Settings ▸ Devices.",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "tg3",
+      "type": "section",
+      "label": "3. Inicia sesión con tu teléfono",
+      "labelEn": "3. Sign in with your phone",
+      "hint": "Escribe tu número con el código de país y toca Enviar código. Después aparecen Código e Iniciar sesión: escribe el código que Telegram te manda (a tu app de Telegram en otro aparato o por SMS) y toca Iniciar sesión.",
+      "hintEn": "Enter your number with its country code and tap Send the code. Then Code and Sign in appear: type the code Telegram sends you (to your Telegram app on another device or by SMS) and tap Sign in.",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "phone",
+      "type": "text",
+      "label": "Tu número",
+      "labelEn": "Your number",
+      "hint": "Con código de país, por ejemplo +57 300 1234567",
+      "hintEn": "With the country code, for example +57 300 1234567",
+      "sync": false,
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "send_code",
+      "type": "action",
+      "label": "Enviar código",
+      "labelEn": "Send the code",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "login_code",
+      "type": "password",
+      "label": "Código",
+      "labelEn": "Code",
+      "hint": "El que te mandó Telegram. Se borra al usarlo",
+      "hintEn": "The one Telegram sent you. Erased once used",
+      "sync": false,
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "sign_in",
+      "type": "action",
+      "label": "Iniciar sesión",
+      "labelEn": "Sign in",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "tg_password",
+      "type": "password",
+      "label": "Contraseña de dos pasos",
+      "labelEn": "Two-step password",
+      "hint": "Solo si Telegram la pide. Va una vez a tu TV",
+      "hintEn": "Only if Telegram asks. It goes once to your TV",
+      "sync": false,
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "check_password",
+      "type": "action",
+      "label": "Confirmar la contraseña",
+      "labelEn": "Confirm the password",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "qr_login",
+      "type": "action",
+      "label": "Iniciar sesión de Telegram con QR",
+      "labelEn": "Sign in to Telegram with QR",
+      "devices": [
+        "tv"
+      ]
+    },
+    {
+      "key": "login_qr",
+      "type": "qr",
+      "label": "Escanéalo con Telegram en tu teléfono",
+      "labelEn": "Scan it with Telegram on your phone",
+      "refreshMs": 5000,
+      "devices": [
+        "tv"
+      ]
+    },
+    {
+      "key": "syncKey",
+      "type": "password",
+      "label": "Clave de sincronización",
+      "labelEn": "Sync key",
+      "hint": "La crea Kino sola: no la escribas tú",
+      "hintEn": "Kino makes it by itself: do not type it",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "login_ok",
+      "type": "text",
+      "label": "Sesión verificada",
+      "labelEn": "Signed in",
+      "hint": "Lo llena Iniciar sesión; no lo cambies",
+      "hintEn": "Sign in fills it in; do not change it",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "logout",
+      "type": "action",
+      "label": "Cerrar sesión",
+      "labelEn": "Sign out",
+      "confirm": "¿Cerrar la sesión de tu cuenta en este aparato?",
+      "confirmEn": "Sign your account out on this device?",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "status",
+      "type": "status",
+      "label": "Estado",
+      "labelEn": "Status"
+    }
+  ],
+  "sync": {
+    "mode": "poll",
+    "pullEveryMs": 600000,
+    "pushDebounceMs": 300000,
+    "maxBlobBytes": 4194304,
+    "keySecret": "syncKey",
+    "generateKey": true,
+    "provision": [
+      "syncKey",
+      "api_id",
+      "api_hash",
+      "tg_password",
+      "login_ok"
+    ]
+  },
+  "signature": {
+    "authorKey": "82b87b938e0a95b142467c815a8823cb54310a13a828c3c4c77b1eda43294ae6",
+    "value": "e8f364f19ce39a081a01f19648e61dda43748129508b146aec8d6849060bb697e159c31d0b0b24eb483d976d97e42d707ba47fe5e39f0afb67caf77c138ef206"
+  }
+}

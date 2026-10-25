@@ -1,0 +1,10 @@
+# No credential is ever committed: keep any local api_hash, key or session file out of the repository.
+*.token
+*.pem
+.env
+node_modules/
+dist/
+.kino-storage.json
+.kino-cookies.json
+.kino-secrets.json
+.superpowers/
