@@ -1,4 +1,4 @@
-// TypeScript declarations for Kino plugins (apiVersion 1 to 13; 13 adds the socket capability (kino.ws, outbound WebSockets) and the byteSource capability (a stream whose bytes the plugin serves through its read export) and the storageLarge capability (a 16 MiB kino.storage for a plugin that keeps a catalog) and the catalog capability (kino.catalog, a searchable SQLite catalog of up to 100,000 items per plugin in a 64 MiB file) and the qrScan capability (kino.qr.scan, the phone's camera scanner for a QR code) and the settings form's qr setting (a QR whose text settingsStatus gives, refreshed every refreshMs) and the kino.crypto operations aesIge, modPow, gunzip, convert and aesIgeVerify and the imageSource capability (a poster, backdrop, still or hero image the plugin serves through its image export, KinoImageRef); 12 adds the syncProvider capability (syncPull, syncPush, syncStatus and the manifest's sync block); 11 adds the externalResolve capability (a stream's `external` hand-off to a resolver app, the manifest's externalResolver) and, from Kino 0.9.66, a stream's advisory `media` and its `portable` universal copy; 10 adds the playlists capability; 9 adds the player panel (panel, panelAction, playerEvent, the manifest's panel and settingsLayout), fetchHosts "any" for hand-written plugins, English setting texts and kino.meta by title; 8 adds the audio item kinds music and podcast; 7 adds tracking and segments; apiVersion 5 only adds the manifest's signature, 6 the plain-plugin SDK: typed and larger secrets, migrate, signed streams, the settings form, debug, telemetry, section, categories, theme and scopedSearch). Reference them from plugin.js
+// TypeScript declarations for Kino plugins (apiVersion 1 to 14; 14 adds the screen capability (screen, screenEvent and the manifest's screen block: a full-screen canvas the plugin builds), library, playerPanelTab, playerControl, room (kino.room, a mailbox hosted on the person's device over the Internet), schedule (background jobs: the manifest's jobs and the job export) and the manifest's enhancements; 13 adds the socket capability (kino.ws, outbound WebSockets) and the byteSource capability (a stream whose bytes the plugin serves through its read export) and the storageLarge capability (a 16 MiB kino.storage for a plugin that keeps a catalog) and the catalog capability (kino.catalog, a searchable SQLite catalog of up to 100,000 items per plugin in a 64 MiB file) and the qrScan capability (kino.qr.scan, the phone's camera scanner for a QR code) and the settings form's qr setting (a QR whose text settingsStatus gives, refreshed every refreshMs) and the kino.crypto operations aesIge, modPow, gunzip, convert and aesIgeVerify and the imageSource capability (a poster, backdrop, still or hero image the plugin serves through its image export, KinoImageRef); 12 adds the syncProvider capability (syncPull, syncPush, syncStatus and the manifest's sync block); 11 adds the externalResolve capability (a stream's `external` hand-off to a resolver app, the manifest's externalResolver) and, from Kino 0.9.66, a stream's advisory `media` and its `portable` universal copy; 10 adds the playlists capability; 9 adds the player panel (panel, panelAction, playerEvent, the manifest's panel and settingsLayout), fetchHosts "any" for hand-written plugins, English setting texts and kino.meta by title; 8 adds the audio item kinds music and podcast; 7 adds tracking and segments; apiVersion 5 only adds the manifest's signature, 6 the plain-plugin SDK: typed and larger secrets, migrate, signed streams, the settings form, debug, telemetry, section, categories, theme and scopedSearch). Reference them from plugin.js
 // with `/// <reference path="./kino.d.ts" />` for editor help; Kino itself runs plain JavaScript.
 // The numbers in the comments come from contract.json, which is authoritative. The app checks that
 // every `kino` member declared here exists in its runtime and nothing else does (KinoDtsTest).
@@ -79,6 +79,12 @@ interface KinoItem {
   badges?: string[];
   /** apiVersion 6: true = an 18+ entry, shown only while the person's 18+ code is unlocked on that device (Ajustes ▸ Control parental). Below apiVersion 6 it is dropped. */
   adult?: boolean;
+  /**
+   * Task 7g (with the `screen` capability): a tap on the card opens this plugin's own screen at that route instead of the
+   * title's page, while the screen can open; otherwise (screens off, the screen hidden or failing) the tap does what it always
+   * did. Anything but `{ screen }` is ignored and logged, the item kept.
+   */
+  open?: { screen: KinoScreenOpen };
 }
 
 /** A Home row. `ref` needs the `browse` capability: the row gets "Ver más", which calls browse(ref, null). */
@@ -96,6 +102,8 @@ interface KinoRow {
    */
   items: KinoItem[];
   ref?: string;
+  /** Task 7g: the row's "Ver mas" opens this plugin's own screen while it can, else follows `ref` as before (none: no "Ver mas"). */
+  open?: { screen: KinoScreenOpen };
   /**
    * What the row (or category, or list) is about, from Kino's closed vocabulary: "peliculas", "series", "anime",
    * "infantil", "documentales", "deportes", "noticias", "musica", "entretenimiento" or "otros". Kino groups Categorías
@@ -571,7 +579,20 @@ interface KinoPanelContext {
    * Kino 0.9.64 (additive): what this Kino draws beyond apiVersion 9's panel; `"loading"`: the `loading` element. Absent on
    * an older Kino, which drops that element: check it before you answer with one.
    */
-  features?: "loading"[];
+  features?: ("loading" | "screen")[];
+  /**
+   * apiVersion 14 (Task 8k), only in a tab YOUR plugin contributes to another plugin's title (`"panel": { "contributes": true }`
+   * and the `playerPanelTab` capability): `true`. Then `ref` is an opaque id (`"foreign:"` and 32 hex characters, keyed by the
+   * install: the same title gives you the same id on that device, never the other plugin's ref; opaque, not secret), `playing`
+   * is empty, `player.autoNext` is left out, and `values` are your own. `title`, `year`, `ids`, `season`, `episode` and the
+   * position are given. Only a plugin's title (never an 18+ one, nor M3U lists or the person's own channels).
+   */
+  foreign?: true;
+  /**
+   * apiVersion 14 (Task 8k), with `foreign`: the plugin that provides the stream playing, its public id and name (so a tab can
+   * tell whether two people watch through the SAME source). Never its ref.
+   */
+  source?: { pluginId: string; name: string };
 }
 
 type KinoPanelValue = string | boolean | number | null;
@@ -602,7 +623,9 @@ type KinoPanelElement =
   /** https only, on a public host; `alt` up to 200 characters. */
   | { type: "image"; url: string; aspect?: "16:9" | "2:3" | "1:1" | "banner"; alt?: string; altEn?: string }
   /** `confirm` (up to 160 characters) asks first. Pressing calls `panelAction` with trigger "press". */
-  | { type: "button"; key: string; label: string; labelEn?: string; confirm?: string; confirmEn?: string }
+  | { type: "button"; key: string; label: string; labelEn?: string; confirm?: string; confirmEn?: string;
+      /** Task 7g: the press opens this plugin's own screen over the player, no panelAction call; `pause` pauses the video. */
+      go?: { screen: KinoScreenOpen }; pause?: boolean }
   /** `autoSave: true` saves each change by itself (trigger "change"). `hint` up to 80 characters. */
   | { type: "toggle"; key: string; label: string; labelEn?: string; scope?: KinoPanelScope; hint?: string; hintEn?: string; autoSave?: boolean }
   /** 1 to 20 options, `value` and `label` 1 to 40 characters, values distinct. */
@@ -639,10 +662,15 @@ interface KinoPanel {
   /** Asks Kino to call `panel` again every so often: 2000 to 60000 ms (clamped). */
   refreshMs?: number;
   /** At most 6: `id` as a key, `label` up to 24 characters. */
-  tabs?: { id: string; label: string; labelEn?: string }[];
+  tabs?: { id: string; label: string; labelEn?: string; badge?: KinoScreenBadge }[];
   /** The tab shown; the first one when absent or unknown. */
   tab?: string;
   elements: KinoLayoutNode<KinoPanelElement>[];
+  /**
+   * Task 8j (apiVersion 14): a player action of the result itself, e.g. a `refreshMs` tick that keeps the video in step with
+   * something. It is not the person's press, so it counts only with the `playerControl` capability (see `KinoPlayerAction`).
+   */
+  player?: KinoPlayerAction;
 }
 
 /** Why `panelAction` is called: a button pressed, an input changed or submitted. "tab" and "open" are reserved: this Kino never sends them. */
@@ -656,10 +684,30 @@ interface KinoPanelEvent {
   value?: KinoPanelValue;
 }
 
-/** What the plugin asks the player to do (every field optional). Bounds below are applied by Kino, which clamps or drops what is outside them. */
+/**
+ * What the plugin asks the player to do (every field optional). Bounds below are applied by Kino, which clamps or drops what is
+ * outside them.
+ *
+ * A plugin that plays nothing (a player-panel tab, say) may declare `playerControl` only beside a `panel` (its own, or
+ * `"contributes": true` with `playerPanelTab`); without one it is refused (contract.json `capabilities.playerControlNeedsPanelMessage`).
+ *
+ * Who may ask what (contract.json `kinoPlayerControl`, Task 8j): the plugin whose title plays may use every field after the
+ * person's press, change or submit in its panel and in a `playerEvent` answer, except `pause`, which needs a press; a panel
+ * result's own `player` (`KinoPanel.player`, a `refreshMs` tick) never counts. A tab contributed to another plugin's title may
+ * only `seekToMs`, after a press in it. With the `playerControl` capability (approved by the person on a red line, revocable in
+ * Ajustes: never assume it) every origin counts, and a contributed tab may also `pause` and set the `speed` (never stored: it
+ * ends with the title, and the person's own speed wins). Such an action is announced to the person with a short notice naming
+ * your plugin ("Party Chat: pausado"), which you cannot word or hide; it is dropped while Kino is not in front (the app in the
+ * background, a Kino page over the player), one of Kino's dialogs is up or the person is seeking, on live only `pause` counts,
+ * at most 30 a minute and one a second. One seek or pause a second, always. A `pause` is dropped while the video is cast
+ * (Chromecast or DLNA) and when the video is already in that state (check `context.paused`). A `panel` inside an answer carries
+ * no `player` of its own.
+ */
 interface KinoPlayerAction {
-  /** Ms from the start, clamped to 0..duration; ignored on live. At most one seek per second. */
+  /** Ms from the start, clamped to 0..duration; ignored on live. At most one seek or pause per second. */
   seekToMs?: number;
+  /** Task 8j: `true` pauses the video, `false` resumes it (anything else is dropped). Never stored; at most one seek or pause per second. */
+  pause?: boolean;
   /** The back/forward step: 5000 to 120000, whole seconds. */
   seekStepMs?: number;
   /** One of 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2. */
@@ -673,10 +721,10 @@ interface KinoPlayerAction {
   autoNext?: { enabled: boolean; countdownS?: number; nextRef?: string };
 }
 
-/** What `panelAction` (and, for `player` and `message`, `playerEvent`) may return. `null` is "nothing to do". */
+/** What `panelAction` (and, for `player`, `message` and `panel`, `playerEvent`) may return. `null` is "nothing to do". */
 interface KinoPanelAnswer {
-  /** A whole new panel. */
-  panel?: KinoPanel;
+  /** A whole new panel (Task 8i: either format, `KinoPanelScreenResult` too; in a `playerEvent` answer it shows in the open panel). */
+  panel?: KinoPanel | KinoPanelScreenResult;
   /** Replaces single elements in place, by key (at most 40 entries); each is one node, validated like any element. */
   patch?: Record<string, KinoLayoutNode<KinoPanelElement>>;
   /** Values to show now (at most 120 keys; strings up to 500 characters). */
@@ -688,6 +736,15 @@ interface KinoPanelAnswer {
   /** A short toast for the person (up to 160 characters); shown only when it passes the rules a `userMessage` does. */
   message?: string;
   player?: KinoPlayerAction;
+  /**
+   * Task 7g: opens this plugin's own screen over the player (the panel closes). Task 8m: or `titleByIds`, Kino's own title page
+   * by ids ([KinoScreenTitleByIds]), honoured only in the answer to the person's press or submit (a change's and a
+   * `playerEvent`'s are dropped, logged). Task 8s: or `url`, a link Kino asks the person about first ([KinoScreenUrl]), under
+   * the same press-only rule. Task 8x: or `copy` ([KinoScreenCopy]), the same rule, the panel stays open. No other shape.
+   */
+  go?: { screen: KinoScreenOpen } | { titleByIds: KinoScreenTitleByIds } | { url: KinoScreenUrl } | { copy: KinoScreenCopy };
+  /** With `go`: pause the video under the screen. Default false: it keeps playing. */
+  pause?: boolean;
 }
 
 /** What `playerEvent` is told. `failed` carries `kind`; `copyChanged` carries `automatic`, `label` and, after an automatic change, the last copy's failure `kind`. */
@@ -699,12 +756,48 @@ interface KinoPlayerEvent {
 }
 
 /**
- * The manifest's `panel` (apiVersion 9): the player's button. `label` 1 to 24 characters (`labelEn` the English one),
- * and `icon` (one of info, tune, settings, star, bolt, language, subtitles, list, magic, heart, movie, tv, sports, music,
- * bookmark, help; another name draws tune) or `iconFile`, a relative .png of exactly 96x96 px with an alpha channel, at
- * most 24 KB (only its alpha is drawn), never both. Declaring it makes `panel` required.
+ * One of Kino's icons by name (Material Symbols, outlined; tinted by the colour role around it). The first sixteen since
+ * apiVersion 9; the rest (Task 8v, `refresh` the circular arrow among them) from apiVersion 14: below it such a name is an
+ * unknown one (a panel button draws `tune`). The screen surface (apiVersion 14) knows every name. The User interface guide
+ * lists what each one means.
  */
-interface KinoManifestPanel { label: string; labelEn?: string; icon?: string; iconFile?: string }
+type KinoIconName =
+  | "info" | "tune" | "settings" | "star" | "bolt" | "language" | "subtitles" | "list" | "magic" | "heart" | "movie"
+  | "tv" | "sports" | "music" | "bookmark" | "help"
+  // apiVersion 14:
+  | "refresh" | "sync" | "add" | "remove" | "delete" | "edit" | "search" | "close" | "check" | "share" | "play"
+  | "pause" | "download" | "upload" | "link" | "open_in_new" | "home" | "person" | "lock" | "notifications"
+  | "warning" | "error" | "visibility" | "copy" | "arrow_back" | "arrow_forward" | "expand_more" | "expand_less"
+  | "more_vert" | "filter_list" | "calendar" | "schedule" | "send" | "mood";
+
+/**
+ * The manifest's `panel` (apiVersion 9): the player's button. `label` 1 to 24 characters (`labelEn` the English one),
+ * and `icon` (a [KinoIconName]; another name, or a name of the larger set below apiVersion 14, draws tune) or
+ * `iconFile`, a relative .png of exactly 96x96 px with an alpha channel, at most 24 KB (only its alpha is drawn), never both. Declaring it makes `panel` required.
+ */
+interface KinoManifestPanel {
+  label: string; labelEn?: string; icon?: KinoIconName; iconFile?: string;
+  /**
+   * apiVersion 14 (Task 8k): `true` adds a TAB to the player panel of ANY plugin's title (never an 18+ one), after Kino's own
+   * and the playing plugin's, in the person's order (Ajustes, «Paneles del reproductor»), at most 6 tabs in all. Needs the
+   * `playerPanelTab` capability (and it needs this), which the person approves with a red line (your tab SEES what they watch
+   * while it is open) and can hide again («Mostrar en el reproductor»). `label` may then be left out (your plugin's name stands
+   * in); the tab is always labelled with your plugin's name and icon. Your `panel(context)` is the same contract, with
+   * `context.foreign` and `context.source`; it is called only while your tab is the selected one and the drawer is open, and
+   * `playerEvent` reaches you only then too (it stops when your tab or the drawer closes). Your tab reads your plugin's name
+   * and icon (never Kino's `info` icon; a name like "Kino" is shown as "Plugin «<name>»"). Your `player` actions count only in
+   * the answer to a `panelAction` after a press in your tab, and only `seekToMs` (with the `playerControl` capability, Task 8j:
+   * from any origin, and `pause` and `speed` too); `go.title` / `go.play` are dropped.
+   */
+  contributes?: boolean;
+  /**
+   * apiVersion 14 (Task 11), only with `contributes: true`: which content your tab joins. "title": a plugin's title (the rule
+   * above); "live": an En vivo channel, after Kino's own «General» tab, with `context.kind === "live"` (`KinoLivePanelContext`:
+   * the channel, never a position) and `go.liveChannel` to tune. Default `["title"]`; a non-empty list of these two (an
+   * unknown value or an empty list refuses the install).
+   */
+  kinds?: ("title" | "live")[];
+}
 
 /**
  * The manifest's `settingsLayout` (apiVersion 9): where the settings of the form go. A list of rows, columns and cards
@@ -713,6 +806,838 @@ interface KinoManifestPanel { label: string; labelEn?: string; icon?: string; ic
  */
 type KinoSettingsLayoutLeaf = { setting: string } | { type: "text"; text: string; textEn?: string } | { type: "image"; url: string; aspect?: "16:9" | "2:3" | "1:1" | "banner" };
 type KinoSettingsLayout = KinoLayoutNode<KinoSettingsLayoutLeaf>[];
+
+/**
+ * The manifest's `screen` (apiVersion 14, capability `"screen"`): the menu entry of the plugin's full-screen canvas.
+ * `label` 1 to 20 characters (`labelEn` the English one), `icon` (a [KinoIconName]) or `iconFile` (a 96x96 .png, never both).
+ * `menuOpens` says what the entry opens: `"section"` (the rows of cards, needs the `section` field), `"screen"` (the canvas) or
+ * `"both"` (two entries, needs `section`); default `"section"` when `section` is declared, else `"screen"`. `adult: true` shows
+ * the entry only while the 18+ code is unlocked. The capability may stand alone and needs the exports `screen` and `screenEvent`.
+ * `settingsIn` says where the plugin's settings show: `"settings"` (Kino's settings list), `"screen"` (only the plugin's own
+ * screen: Kino hides the settings form in its settings list while the screen can be opened; refused with `menuOpens: "section"`)
+ * or `"both"` (the default). Either way they are the same, real settings (`kino.config`). `every`: timers that run whenever
+ * the screen is open, as a tree root's `every` (KinoScreenTimer); a bad one is dropped and logged, never refused.
+ * `opensFrom` (Task 7g) says where the screen opens from: `"menu"` (the icon: TV sidebar, phone Inicio strip) and/or
+ * `"settings"` (a button at the top of the plugin's own settings page); default `["menu"]`, never empty. Without `"menu"` there
+ * is no icon and no entry: `icon`, `iconFile` and `menuOpens` are not needed and are ignored (a `section` keeps its entry as
+ * today). `settingsIn: "screen"` needs some way in: `menuOpens` `"screen"`/`"both"` or `"settings"` in `opensFrom`; its settings
+ * page then shows only the button (and Kino's own switches) while the screen can open, and the form whenever it cannot.
+ * `settingsButton` names that button (`label`, `labelEn`, each 1 to 40 characters once control characters are removed);
+ * default Kino's «Abrir pantalla» / "Open screen".
+ */
+interface KinoManifestScreen {
+  label: string; labelEn?: string; icon?: KinoIconName; iconFile?: string; menuOpens?: "section" | "screen" | "both"; adult?: boolean;
+  settingsIn?: "settings" | "screen" | "both"; every?: KinoScreenTimer | KinoScreenTimer[];
+  opensFrom?: ("menu" | "settings")[]; settingsButton?: { label?: string; labelEn?: string };
+  /**
+   * Task 8: what the screen takes the place of. `["categories"]`: while the screen can open, every place Kino opens THIS plugin's
+   * categories (a tile of its group in Kino's Categorías, a `go: { categories: true }` from its other routes or from the player
+   * panel's screen) opens the screen at the route `categories` with `args: { from: "categories" | "screen" | "panel", category? }`
+   * (`category`: the tile's `ref`, when a tile was pressed; `from: "panel"` when its screen over the player asks, which then
+   * starts again in place there). With screens switched off or the screen hidden (18+ locked, plugin off), Kino's own
+   * Categorías shows instead. When its FIRST opening fails (`screen()` throws, times out, an invalid tree), Kino shows the
+   * pressed tile's own "Ver más" list instead (no tile: Kino's Categorías), logs it, and the plugin's tiles skip the screen
+   * until the app restarts; a failure later, while it is in use, keeps the screen's error state and its «Reintentar». A
+   * `go: { categories: true }` sent FROM that `categories` route
+   * opens Kino's own screen (never itself again). Needs a catalog to fall back on: the `browse` capability and the
+   * `categories` export (refused at install otherwise). Build it from `titleRail`, `titleGrid`, `heroCard`, `TabBar`, `Chips` and
+   * `go` (`browse` a category, `title`, `search`).
+   */
+  replaces?: "categories"[];
+}
+
+/**
+ * The manifest's `enhancements` (read from the Kino of apiVersion 14; contract.json `manifest.enhancements`): features of a
+ * newer apiVersion offered WITHOUT raising the plugin's own `apiVersion`, so a Kino that does not know them (it ignores this
+ * key) still installs and runs the plugin as before. Keyed by the apiVersion that brought the feature, e.g.
+ * `"enhancements": { "14": { "capabilities": ["screen", "library"], "screen": { "label": "Inicio" } } }` in a plugin that keeps
+ * `"apiVersion": 8`. A Kino that knows a key merges its block over the manifest, keys in numeric order: `capabilities` are
+ * ADDED (only `"screen"`, `"library"`, `"playerPanelTab"`, `"playerControl"` and `"room"`), `screen`, `settings` (the whole list) and `panel` REPLACE the
+ * manifest's (`"playerPanelTab"` and a `panel` with `"contributes": true` come together in one block); then everything is
+ * checked at that apiVersion with the very same rules as the plain fields. A plugin is NEVER refused because of an
+ * enhancement: a block is dropped and logged, and the plugin runs as its own manifest says, when it fails those rules (a bad
+ * screen, a capability that can't be added, any other field), when its key is at or below the plugin's own `apiVersion`
+ * (declare a feature once), when its `settings` change the type of a setting the manifest declares (keep the list a superset
+ * of the manifest's: values sync by key with devices on an older Kino), when its `screen.replaces` names Categorías the
+ * plugin's own apiVersion lacks (below 6), and when the script lacks an export the block newly needs (`screen` and
+ * `screenEvent`, `settingsStatus` or `action` for such settings; checked at install and at every start). A key above the
+ * Kino's apiVersion is ignored. The plugin's `apiVersion` never moves, so everything else keeps its old behaviour; the JS
+ * stays one file and its `screen`/`screenEvent` exports are simply never called by an older Kino. The added capabilities'
+ * consent lines (the library's, in red) are asked at install and at the update that adds them, like any other. `kino.library`
+ * exists on every Kino of apiVersion 14, but until the person approves the line its calls reject with `permission_denied`:
+ * a plugin installed on an older Kino, whose person then updates Kino, is asked only with its NEXT version. So
+ * `typeof kino.library === "object"` is not enough: catch the refusal and work without it. `node sdk/validate.mjs` reports
+ * every block the app would drop as a problem.
+ */
+interface KinoManifestEnhancements {
+  [apiVersion: string]: { capabilities?: ("screen" | "library" | "playerPanelTab" | "playerControl" | "room")[]; screen?: KinoManifestScreen; settings?: unknown[]; panel?: KinoManifestPanel };
+}
+
+/**
+ * A screen's timer: Kino sends `screenEvent { name: event }` every `ms` milliseconds (at least 1000: a shorter one is raised,
+ * at most a day) while the screen is open, shown and the app in front (a pop-up does not stop it; the background does). At
+ * most 3 timers per screen (the manifest's and the root's together). The next wait starts once a tick and the render it
+ * asked for are done (twice what that took when longer); a tick never runs beside or ahead of the person's events. A timer
+ * whose ticks fail or time out 3 times in a row is switched off for that opening (logged). Timer calls never count toward
+ * the plugin's "No responde". A tick's answer keeps only `state`, `toast`, `close` and `config` (its pop-ups, `focus`, `go`
+ * and `route` are dropped), and its `config` writes each setting at most once a minute.
+ */
+interface KinoScreenTimer { ms: number; event: string }
+
+/** What a banner or a toast is about: Kino paints it with its own colour and icon for that role. */
+type KinoScreenRole = "info" | "warning" | "error" | "success";
+
+/**
+ * Load more on a `ListView`, `titleRail` or `titleGrid`: `onEndReached` is sent once when the person reaches the last item, and
+ * again only after the plugin answered and the tree it asked for is drawn, and then only once the list grew or its
+ * `loadingMore` went from true to false (a load that finished with nothing new; turning it on never asks again). Never more
+ * than once a second per list (an end reached within that second asks by itself once it is over), never while the screen
+ * is hidden or the app in the background (it asks once the screen shows again), never for an empty list, never at 500
+ * items (the cap stays, and 60 for a rail or grid drawn inside a scroll). A load-more's answer never changes the route:
+ * its `route` is dropped (logged). Set `loadingMore: true` to show Kino's spinner after the items and `done: true` to stop
+ * asking.
+ */
+interface KinoScreenPaging { onEndReached?: { event: string; arg?: string }; loadingMore?: boolean; done?: boolean }
+
+/** A device Kino draws a screen on (`ctx.device`, a node's `devices`). */
+type KinoScreenDevice = "phone" | "tv" | "desktop";
+/** A width class (Material window size classes: compact < 600 dp, medium 600-839, expanded >= 840); a node's `sizes`. */
+type KinoScreenSizeClass = "compact" | "medium" | "expanded";
+/**
+ * A style or layout property: a plain value or a per-size map. A class missing from the map takes the next smaller one
+ * present, else Kino's default; each class's value is checked like a plain one. Kino resolves them before drawing.
+ */
+type KinoScreenResponsive<T> = T | { compact?: T; medium?: T; expanded?: T };
+/** The spacing scale (`padding`, `margin`, `gap`); a value off it is dropped and logged. */
+type KinoScreenSpacing = 0 | 4 | 8 | 12 | 16 | 24 | 32 | 48;
+/** The size scale (`width`, `height`, `minHeight`), in the same units as the spacing. */
+type KinoScreenSize = 16 | 24 | 32 | 40 | 48 | 64 | 80 | 96 | 120 | 160 | 200 | 240 | 320 | 400 | 480 | 560 | 640;
+/** Every side, or some of them (`x` = start and end, `y` = top and bottom; `start`/`end` follow the reading direction). */
+type KinoScreenEdges = KinoScreenSpacing | { x?: KinoScreenSpacing; y?: KinoScreenSpacing; top?: KinoScreenSpacing; end?: KinoScreenSpacing; bottom?: KinoScreenSpacing; start?: KinoScreenSpacing };
+/**
+ * Colors only by role, painted with Kino's palette (never a hex value). Task 15: `primaryContainer` (the surface tinted with the
+ * primary; a manifest `theme` tints it as it tints `primary`) and `surfaceVariant` (Kino's raised surface): on a box they are
+ * its fill and its text and icons take the matching on-colour; on a `Text` or an `Icon` the colour, nudged to read.
+ */
+type KinoScreenColorRole = "primary" | "secondary" | "surface" | "muted" | "warning" | "error" | "onPrimary" | "primaryContainer" | "surfaceVariant";
+/** A radius token. */
+type KinoScreenRadius = "none" | "small" | "medium" | "large" | "full";
+/**
+ * Task 15: `borderRadius` per corner: each a token, an omitted corner `medium`; `start` and `end` follow the reading direction.
+ * Fills, clips, outlines and the TV's focus ring follow it.
+ */
+type KinoScreenCorners = { topStart?: KinoScreenRadius; topEnd?: KinoScreenRadius; bottomStart?: KinoScreenRadius; bottomEnd?: KinoScreenRadius };
+/**
+ * Task 15: the shared `badge` (the `Badge` node's value): `"dot"`, or a short count or word (at most 12 characters, cut beyond)
+ * with an optional colour role (Kino's primary by default). Drawn on the node's top end corner (beside a tab's label); a screen
+ * reader reads it after the node's name. Set it again on each render.
+ */
+type KinoScreenBadge = "dot" | { text: string; textEn?: string; color?: KinoScreenColorRole };
+/** The style every node takes; each property may be a per-size map. */
+interface KinoScreenStyle {
+  padding?: KinoScreenResponsive<KinoScreenEdges>; margin?: KinoScreenResponsive<KinoScreenEdges>; gap?: KinoScreenResponsive<KinoScreenSpacing>;
+  borderRadius?: KinoScreenResponsive<KinoScreenRadius | KinoScreenCorners>;
+  width?: KinoScreenResponsive<KinoScreenSize>; height?: KinoScreenResponsive<KinoScreenSize>; minHeight?: KinoScreenResponsive<KinoScreenSize>;
+  /** Take the parent's whole width. */
+  fill?: KinoScreenResponsive<boolean>;
+  /** Share of a `Row` or `Column`, 1..12 (Flutter's `Expanded(flex:)`). */
+  flex?: KinoScreenResponsive<number>;
+  /** Across the main axis (a `Row`'s height, a `Column`'s width). */
+  crossAxisAlignment?: KinoScreenResponsive<"start" | "center" | "end" | "stretch">;
+  /** Along the main axis. */
+  mainAxisAlignment?: KinoScreenResponsive<"start" | "center" | "end" | "spaceBetween" | "spaceAround">;
+  color?: KinoScreenResponsive<KinoScreenColorRole>;
+  /**
+   * In a `Row` with `wrap: true` (the twelve-column layout, Bootstrap's grid), how many of the line's 12 columns this child
+   * takes: 1..12, or `"auto"` (the autos of a line share what the fixed spans leave, equally). A child without one is `auto`.
+   * Above 12 it is 12 (logged); anything else is dropped (logged). Only on a child of a row that wraps (in some size class):
+   * anywhere else it is ignored and logged. Per size, like `col-md-6`:
+   * `span: { compact: 12, medium: 6, expanded: 4 }`.
+   */
+  span?: KinoScreenResponsive<number | "auto">;
+  /**
+   * In a wrapping row, the empty columns before this child (0..11; above 11 it is 11, logged), never past what its span
+   * leaves (lowered, logged). Per size as `span`.
+   */
+  offset?: KinoScreenResponsive<number>;
+  /**
+   * Task 15: at most this share of the width the parent offers, 0.25 to 1 in steps of 0.05 (off the scale: dropped, logged);
+   * the node still wraps its content, so it is a maximum. With `fill: true` it takes exactly that share. Where it sits is the
+   * parent's `crossAxisAlignment` (a chat's bubbles: `0.75`, their column aligned `end` or `start`).
+   */
+  maxWidthFraction?: KinoScreenResponsive<number>;
+}
+
+/** The kind of a `go.title` / `go.play` ref: what this plugin's `home`/`search`/`browse` said it was. */
+type KinoScreenKind = "movie" | "series" | "episode" | "live" | "music" | "podcast";
+/**
+ * The title a `go.title` / `go.play` opens (Task 8), only ever this plugin's own: `ref` and `kind` as its lists gave them. A
+ * title on the canvas (a `titleCard`, `titleRail`, `titleGrid` item) is opened with that very item, so the page, "Continuar
+ * viendo", the saved lists and the progress know it as Home does: pass its `id` when two items share a `ref`. A title that is
+ * NOT on the canvas needs its `id` (an item id) and `title` (at most 200 characters), and `adult: true` when it is 18+ (hidden
+ * while the 18+ code is locked, as on Home); without them Kino cannot know which title it is and shows its usual error. A
+ * `go.play` of a live channel plays it, of a series opens its page (an episode needs its series: `kind: "episode"` alone
+ * shows the error, and so does a `series` from a plugin without `episodes`, which Home never lists); a movie, a track or a
+ * podcast episode plays at once. A bad `id`, `title` or `adult` drops the go (logged). A card whose item has `open: { screen }`
+ * starts the screen again at that route instead (in place, like a `go.screen`).
+ */
+type KinoScreenTitleRef = { ref: string; kind: KinoScreenKind; id?: string; title?: string; adult?: boolean };
+/**
+ * Where a node or an answer sends the person, always into this plugin's own content or one of Kino's own pages: exactly one
+ * of these ten shapes (anything else, a bare URL string or an intent, is dropped; a link goes only through `url`, behind
+ * Kino's own sheet). `ref` at most 4096 characters, `q` at most 200.
+ * Task 8: `search` opens Kino's search with `q` filled in and ONLY this plugin as the source (the person sees its chip and
+ * may clear it; a plugin without `search` gets it refused); `browse` its "Ver más" list for that ref; `section` its section;
+ * `categories` Kino's Categorías showing this plugin's group first (its own screen when `screen.replaces` names them;
+ * refused and logged when the plugin has no Categorías tiles: the `categories` export, `browse`, usable). Kino's page opens
+ * over the screen: Back returns to the screen with its state. At most one such page every 500 ms: a second go sent meanwhile
+ * is dropped and logged. From the screen opened over the player, the screen closes first and the video then does what it
+ * does whenever a Kino page covers the player (the TV pauses, a live stream stops); `play` plays the new title in the player.
+ * The answer to the reserved `open` event never leaves the screen: its `go` (other than `screen`) is dropped and logged,
+ * as a timer's is, so opening a screen never plays or pushes anything by itself. A tap's go is never affected.
+ */
+type KinoScreenGo =
+  | { title: KinoScreenTitleRef }
+  | { play: KinoScreenTitleRef }
+  | { search: { q: string } }
+  | { browse: { ref: string; title?: string; titleEn?: string } }
+  | { section: true }
+  | { categories: true }
+  | { close: true }
+  | { screen: KinoScreenOpen }
+  | { titleByIds: KinoScreenTitleByIds }
+  | { url: KinoScreenUrl }
+  | { copy: KinoScreenCopy }
+  | { liveChannel: KinoScreenLiveChannel };
+
+/**
+ * `go: { liveChannel: { provider, code } }` (Task 11, apiVersion 14, the twelfth shape): Kino tunes the player to the channel
+ * `code` (an item id, 1 to 128 of `A-Z a-z 0-9 . _ ~ -`) of the En vivo provider plugin `provider` (a plugin id, never `own`).
+ *
+ * - Only for a plugin whose approved contributed tab declares `"kinds": ["live"]` (else dropped, logged `needs_live_tab`), and
+ *   only after the person's own tap or press (as `go.url` and `go.copy`).
+ * - The provider must be installed, usable and list live channels; an 18+ provider only while the 18+ code is unlocked; an
+ *   18+ channel is not found while it is locked (Kino's usual message).
+ * - From the player panel on a live channel the channel changes in place (the panel and its pin stay); from anywhere else the
+ *   panel or screen closes and the player opens the channel. Nothing comes back: the next context says the channel.
+ */
+type KinoScreenLiveChannel = { provider: string; code: string };
+
+/**
+ * `go: { copy: { text, label?, sensitive? } }` (Task 8x, the eleventh shape): a «Copiar» button. Kino puts `text` on the
+ * clipboard itself (clip label «Kino») and ALWAYS shows its own toast, «Copiado» / «Copied», or «Copiado: <label>», so nothing
+ * is copied unseen; Kino never reads the clipboard and nothing comes back to you. No capability.
+ *
+ * - `text`: 1 to 500 characters in at most 6 lines, once control (a newline stays), direction, zero-width and line-separator
+ *   characters are removed and it is trimmed. `label`: what was copied, at most 40 characters, named in the toast.
+ *   `sensitive: true` hides it from the clipboard's preview on Android 13+ (a room code). Anything else drops the go, logged
+ *   (never the text).
+ * - Only after the person's own tap or press (a node's tap, a form's submit, the answer to either, a pop-up's button, a player
+ *   panel press, a contributed tab's press); from `open`, a timer, a load-more, a change, a `refreshMs`, a pop-up's `onClose`
+ *   or a `playerEvent` it is dropped, logged. A panel stays open.
+ * - One copy every 500 ms (all plugins) and 20 a minute per plugin.
+ * - On a TV nothing is copied: Kino's toast says «No se puede copiar en este aparato». Hide the button there (`kino.device`).
+ */
+type KinoScreenCopy = { text: string; label?: string; sensitive?: boolean };
+
+/**
+ * `go: { url: { href, title? } }` (Task 8s, the tenth shape): asks Kino to open a link in the phone's browser (a "Ver noticia"
+ * button). Nothing opens by itself and it needs no capability: Kino first shows ITS OWN sheet: its heading "Abrir un enlace",
+ * "Lo pide: <your plugin's name>" (cut at 24 characters; a tab you contribute to another plugin's panel shows YOUR name, never
+ * the title's plugin), the link's host (wrapping, its end always drawn; an international one as its punycode with a warning to
+ * check it, never decoded), your `title` under Kino's "Texto del plugin:" label, and Cancelar (focused first) and Abrir (which
+ * does nothing for its first 600 ms). Only Abrir opens it, and only in a browser (never another app's link filter). On a TV, or
+ * a phone with no browser, the sheet shows the link as a QR code to scan with a phone instead (a link over 1000 characters: a
+ * line saying it is too long for one), and a Close button.
+ *
+ * - `href`: `https://` only, at most 2048 characters of printable ASCII (an international host written as punycode
+ *   `xn--...`, everything else percent-encoded); a public DNS name with a dot (never an IP address, `localhost`, `.local`,
+ *   `.internal`, `.lan`, `.home.arpa`, the loopback wildcard names `nip.io`, `sslip.io`, `xip.io`, `localtest.me`, `lvh.me`
+ *   or a single label), no `user:password@`, no port but 443. Kino keeps
+ *   `https://<host lower-cased><the rest as written>` (`/` added when the rest is empty). A bad href drops the go, logged
+ *   with its host at most, never the address.
+ * - `title`: optional, at most 60 characters once control, direction and line-separator characters are removed and runs of
+ *   combining marks cut to 2.
+ * - Only after the person's own tap or press (a node's tap, a form's submit, the answer to a tap or a submit, a pop-up's
+ *   button, a player panel press, a contributed tab's press). From the reserved `open`, a timer, a load-more, a change, a
+ *   `refreshMs`, a pop-up's `onClose` or a `playerEvent` it is dropped, logged.
+ * - At most one link a second (all plugins) and 10 a minute per plugin; one sheet at a time (a link while one is asked about
+ *   is dropped). An answer that comes more than 5 s after the tap drops the link (logged); the same answer's own pop-ups
+ *   (`dialog`, `sheet`, `menu`, `ui` `open`) are dropped so nothing covers Kino's sheet. Nothing comes back to you: not whether
+ *   the person opened it.
+ * - Desktop opens it with its own opener (same sheet and rules).
+ */
+type KinoScreenUrl = { href: string; title?: string };
+
+/**
+ * `go: { titleByIds: {...} }` (Task 8m, the ninth shape): opens KINO'S OWN title page for the title these ids name (the page a
+ * Home TMDB card opens), where the person picks any of THEIR sources. It never opens your content or another plugin's by ref,
+ * never plays, carries no URL, needs no capability, and nothing comes back to you (not even which plugins the person has).
+ * Use it when people with different plugins should reach the same title (a shared room, a list of recommendations).
+ *
+ * - At least one of `tmdb` (a whole number from 1 to 2147483647) and `imdb` (`tt` and 7 to 10 digits); with only `imdb`,
+ *   Kino asks TMDB for the title (an unknown one shows Kino's usual "No se pudo abrir"; never a title search).
+ * - `season` (0 to 999) and `episode` (1 to 9999, needs `season`) only with `kind: "series"`; today the page opens the series
+ *   whole. `year` 1870 to 2100. `title` at most 120 characters once control, direction and zero-width characters and U+FEFF are removed (for your
+ *   own logs: the page shows TMDB's). Any other field (a `ref`, a `source`, a URL) drops the whole go, logged.
+ * - Only after the person's own tap or press: a node's tap, a form's submit, the answer to a tap or a submit, a player panel
+ *   press. From the reserved `open`, a timer, a load-more, a change, a `refreshMs` or a `playerEvent` it is dropped, logged.
+ * - 18+: while the person's parental control is on, Kino opens it only when TMDB says the title is not adult; adult or
+ *   unknown shows Kino's locked message.
+ * - While Kino asks TMDB it shows "Buscando el título…"; one lookup at a time (a tap meanwhile is dropped), and if the person
+ *   has moved on when it answers, nothing opens.
+ * - At most one page-opening go every 500 ms. From the player panel (yours or a tab you contribute to another plugin's title)
+ *   the panel closes first, then the page covers the player as any Kino page does.
+ */
+type KinoScreenTitleByIds = {
+  tmdb?: number; imdb?: string; kind: "movie" | "series"; season?: number; episode?: number; title?: string; year?: number;
+};
+
+/**
+ * `go: { screen: {...} }` (Task 7g): opens THIS plugin's own screen, never another plugin's, a URL or an intent. `route` (a name,
+ * 1 to 64 of `A-Z a-z 0-9 . _ ~ -`) and `args` (an object, at most 4096 bytes of JSON) reach `screen()` and the reserved `open`
+ * event as `route: { name, params: {}, args }` (`name` `"main"` when no `route`), so a deep link lands on the right tab. From
+ * inside the screen it starts again at that route (the state stays): `screen()` runs, then the reserved `open` event comes
+ * again with the new route, so load what the args name there, exactly as when another surface opened it. At most one such
+ * restart a second (a sooner one is dropped and logged), so an `open` that answers `go.screen` cannot loop. Accepted in a screen, in the player panel's answers and
+ * buttons (`pause: true` beside it pauses the video; default it keeps playing under the screen) and as an item's or a row's
+ * `open` in `home`, `section` and `browse` answers. With screens switched off, or the screen hidden or failing, a card or row
+ * does what it did before; a plugin without a screen gets it refused and logged.
+ */
+type KinoScreenOpen = { route?: string; args?: Record<string, unknown> };
+
+/**
+ * A local operation Kino runs at once, with no plugin call, on another node of the same screen by its `key` (kept in the
+ * state under `ui`). `set` gives an input a value: a string (at most 2000 characters), a boolean, a number, or a list of
+ * at most 500 strings (chips).
+ */
+type KinoScreenUiOp =
+  | { show: string } | { hide: string } | { enable: string } | { disable: string } | { focus: string }
+  /**
+   * Shows or hides a node; Task 15: `prop: "selected"` flips the `selected` state of a button or a card with `onTap` instead
+   * (`"hidden"`, the default, is the same as none). Any other `prop` drops the operation, logged.
+   */
+  | { toggle: string; prop?: "hidden" | "selected" }
+  /** Task 15: on a button or a card with `onTap`, `value: true | false` sets its `selected` state (anything else is ignored, logged). */
+  | { set: { key: string; value: string | boolean | number | string[] } }
+  | { clear: string }
+  /** Opens the `popup` node of that key (replacing any open pop-up); `close` closes it when it is the one open. */
+  | { open: string } | { close: string };
+/**
+ * What a tap, long press, change or submit does: an event name for `screenEvent` (the shorthand string, its `arg` from the
+ * node's `arg`), or ui operations (at most 8, run first) followed by an event or a go, or a bare go object. The event name
+ * `open` is reserved; `arg` at most 4096 characters.
+ */
+type KinoScreenAction = string | { ui?: KinoScreenUiOp[]; event?: string; arg?: string } | { ui?: KinoScreenUiOp[]; go: KinoScreenGo } | KinoScreenGo;
+/**
+ * A declared `popup`'s `onClose` (apiVersion 14, Task 7i-2): what runs after the person dismissed it (Back, Kino's close, a
+ * tap outside), never after one of its buttons, a menu item, an answer's `close` or another pop-up replaced it. An event name
+ * (its `arg` from the popup's `arg`) or `{ ui?, event?, arg? }`; a `go`, an `open` and a `focus` are dropped (closing a
+ * pop-up never navigates, opens one nor moves focus). Back always closes: the event is not the person's press (no
+ * `kino.qr.scan`), and its answer's `dialog`, `sheet`, `menu`, `focus`, `go`, `route` and `ui` open and focus operations
+ * are dropped, logged; its `state`, `toast`, `config`,
+ * `close` and other `ui` operations apply. A popup's `title` is optional: without one (or a blank one) no empty row is drawn
+ * and Kino's close (an X alone) starts the bottom row, the pop-up's own buttons together at its end (Task 7k); with a title
+ * the X ends the title's row.
+ */
+type KinoScreenPopupClose = string | { ui?: KinoScreenUiOp[]; event?: string; arg?: string };
+
+/** What every node takes. `key` is required (and unique) on inputs; other nodes get a generated one. */
+interface KinoScreenBase extends KinoScreenStyle {
+  key?: string;
+  /** For tests and tooling, never drawn: 1..64 characters. */
+  testKey?: string;
+  enabled?: boolean; hidden?: boolean;
+  /** A tap on the node (a button's is `onPressed`). */
+  onTap?: KinoScreenAction; onLongPress?: KinoScreenAction;
+  /** The event arg of a shorthand-string action. */
+  arg?: string;
+  /** Drawn only on these devices / width classes; an unknown name drops the node. */
+  devices?: KinoScreenDevice[]; sizes?: KinoScreenSizeClass[];
+  /**
+   * Task 15, on a node that takes focus (a button, an input, a `TabBar`, a `titleCard`, or any node with `onTap` or
+   * `onLongPress`): on a render (a tick or an answer) that left focus nowhere or on a node that is gone, focus goes to the first
+   * `autofocus` node in tree order (the remote lands on the one way forward). An answer's own `focus` wins; a node that still
+   * holds focus keeps it; on a phone a text field is never autofocused (no keyboard opens). Elsewhere ignored, logged.
+   */
+  autofocus?: boolean;
+  /**
+   * Task 15, on a button or a card with `onTap`: Kino's selected look (filled-tonal; a card: an outline in the primary colour),
+   * read as selected. State, not an action: `ui` `set` (true or false) and `toggle` with `prop: "selected"` change it without a
+   * round trip until your next render says it again. `Chips` and `TabBar` say theirs with `value`.
+   */
+  selected?: boolean;
+  /** Task 15, on a button or a card with `onTap`: a count or a dot on the top end corner ([KinoScreenBadge]). */
+  badge?: KinoScreenBadge;
+}
+/** One choice of a `DropdownButton`, `RadioGroup`, `Chips` or `TabBar` (values distinct, at most 500); a tab also takes a `badge` (Task 15). */
+interface KinoScreenOption { value: string; label: string; labelEn?: string; badge?: KinoScreenBadge }
+/**
+ * What every input takes; its value lives in the state under `inputs.<key>`. `bind`: the key of one of the plugin's own
+ * settings: the field shows its stored value when the screen opens and writes the person's change back to it through Kino's
+ * settings (the same store and sync as Kino's settings screen) -- a choice on change, a text on commit (keyboard action, focus
+ * leaving it, the TV dialog's accept), never per keystroke, and only when the value differs from the stored one; the plugin still
+ * gets the field's events. A `Switch` or `Checkbox` holds a `toggle` setting, a `TextField` a `text` one, a `DropdownButton`,
+ * `RadioGroup` or single `Chips` a `select` or `text` one, a `Slider` a `text` one (its number as text). Never a `url` (only the person types an
+ * address: the `settings` node), a `password`, an `action` or a `help` setting; any other bind, or one inside an answer's pop-up,
+ * is dropped, logged. Each setting is written at most once every 500 ms (the newest value wins, the last one always lands).
+ */
+interface KinoScreenInput extends KinoScreenBase { key: string; labelText?: string; labelTextEn?: string; hintText?: string; hintTextEn?: string; onChanged?: KinoScreenAction; bind?: string }
+/** The kinds of a `TextField` (no password kind). */
+type KinoScreenInputKind = "text" | "number" | "email" | "url" | "search";
+/**
+ * A field's rules inside a `Form`, checked by Kino before anything reaches the plugin. `required`: a text not blank, a
+ * choice made, a toggle or checkbox on, a chip picked. An empty field that is not required passes every check.
+ * `errorText` (and `errorTextEn`) is what the person reads under the field when it fails, else Kino's own text.
+ */
+interface KinoScreenFieldRules { required?: boolean; errorText?: string; errorTextEn?: string }
+/**
+ * A `TextField`'s rules: `minLength` characters (1..its `maxLength`); `pattern` (at most 200 characters) must match the
+ * WHOLE value, in a safe subset: literals, `.`, `^`, `$`, `|`, `( )`, `(?: )`, `[...]`, the escapes \d \D \w \W
+ * \s \S \b \B \n \r \t and escaped punctuation, the quantifiers `* + ? {n} {n,} {n,m}` (at most 1000, optionally lazy).
+ * Quantifiers nest freely (`^\w+(\.\w+)?$`). No backreferences, no lookarounds; at most 500 steps once counts are
+ * expanded. A pattern outside the subset is dropped and logged. Kino matches it with its own linear-time matcher (\d is
+ * [0-9], \w [A-Za-z0-9_], \s ASCII whitespace), never with the platform's regex; one submit runs at most 16 patterns and 4,000,000 matcher steps (past either, the rest pass).
+ */
+interface KinoScreenTextRules extends KinoScreenFieldRules { minLength?: number; pattern?: string }
+
+/**
+ * One node of a screen tree: depth at most 10, at most 600 nodes, lists of at most 500 items, plain text of at most 2000
+ * characters (`...En` the English twin). An invalid node is dropped and logged; the rest is drawn.
+ */
+type KinoScreenNode =
+  | (KinoScreenBase & { type: "Column" | "Stack"; children?: KinoScreenNode[] })
+  /**
+   * `wrap: true`: the twelve-column layout. Each child takes its `span` columns after its `offset`; one that does not fit
+   * what is left of a line starts the next; `gap` (the spacing scale) between cells and between lines, the columns lined
+   * up from line to line. A line is as tall as its tallest child, and by default (or with `crossAxisAlignment: "stretch"`)
+   * every Card or container child (Column, Row, Stack, GridView, Form) with no fixed `width` or `height` is drawn that tall,
+   * so a grid of cards is even; any other child (a button, a badge, an Image with a size...) keeps its own height at the top
+   * of the line. `start`, `center` or `end` keep every child at its own height, at the top, middle or bottom of its line. A hidden child leaves no gap. A child takes its natural width at
+   * the start of its columns unless it has `fill: true` (then the cell's whole width). `flex`, `mainAxisAlignment` and
+   * `stackOnNarrow` mean nothing there; without `wrap` a row is as before (`flex` shares it). On the TV focus follows the
+   * tree, the D-pad moving by what is drawn.
+   */
+  | (KinoScreenBase & { type: "Row"; children?: KinoScreenNode[]; stackOnNarrow?: KinoScreenResponsive<boolean>; wrap?: KinoScreenResponsive<boolean> })
+  /**
+   * `flush: true` (apiVersion 14): no padding of the card's own (its `padding` is not used either) and its children clipped
+   * to its rounded shape, so an `Image` at its top runs to its edges; pad the text children with their own `padding`.
+   */
+  | (KinoScreenBase & { type: "Card"; children?: KinoScreenNode[]; variant?: KinoScreenResponsive<"plain" | "outlined" | "filled">; flush?: KinoScreenResponsive<boolean> })
+  | (KinoScreenBase & { type: "SingleChildScrollView"; children?: KinoScreenNode[]; direction?: KinoScreenResponsive<"vertical" | "horizontal"> })
+  | (KinoScreenBase & { type: "GridView"; children?: KinoScreenNode[]; columns?: KinoScreenResponsive<number> })
+  /** `SizedBox` is an empty box of its `width`/`height`; `Spacer` an empty one that takes its `flex` share. */
+  | (KinoScreenBase & { type: "Spacer" | "SizedBox" | "Divider" })
+  /**
+   * Task 15: `time` (epoch ms) is written by Kino in the app's language: `timeFormat: "relative"` (the default: «ahora»,
+   * «hace 2 min», «ayer», rewritten every minute while shown, never a call to you) or `"clock"` («18:42», the device's 12/24 h).
+   * With a `time`, `text` is optional and is its prefix («Actualizado hace 5 min»).
+   */
+  | (KinoScreenBase & { type: "Text"; text: string; textEn?: string; style?: KinoScreenResponsive<"h1" | "h2" | "h3" | "h4" | "h5" | "p" | "caption" | "label">; maxLines?: KinoScreenResponsive<number>; bold?: KinoScreenResponsive<boolean>; time?: number; timeFormat?: "relative" | "clock" })
+  | (KinoScreenBase & { type: "Text"; text?: string; textEn?: string; style?: KinoScreenResponsive<"h1" | "h2" | "h3" | "h4" | "h5" | "p" | "caption" | "label">; maxLines?: KinoScreenResponsive<number>; bold?: KinoScreenResponsive<boolean>; time: number; timeFormat?: "relative" | "clock" })
+  /**
+   * `fallback` (apiVersion 14): one node drawn in the image's box, at its size, when the picture fails to load or there is
+   * no `url` (with a fallback, an image whose `url` is missing or not https on a public host is kept and draws it). It may
+   * hold only Column, Row, Stack, Card, Spacer, SizedBox, Divider, Text, Icon, Badge, Skeleton and Image, at any depth, and
+   * nothing in it is pressed (`onTap`/`onLongPress` there are ignored). Without one a failed picture shows Kino's mark.
+   */
+  | (KinoScreenBase & { type: "Image"; url?: string; aspect?: KinoScreenResponsive<"16:9" | "2:3" | "1:1" | "banner">; alt?: string; altEn?: string; fallback?: KinoScreenNode })
+  | (KinoScreenBase & { type: "Icon"; name: KinoIconName })
+  | (KinoScreenBase & { type: "Badge"; text: string; textEn?: string })
+  | (KinoScreenBase & { type: "LinearProgressIndicator"; value?: number; labelText?: string; labelTextEn?: string })
+  | (KinoScreenBase & { type: "CircularProgressIndicator"; text?: string; textEn?: string })
+  | (KinoScreenBase & KinoScreenPaging & { type: "ListView"; items?: KinoScreenNode[]; empty?: KinoScreenNode; columns?: KinoScreenResponsive<number>;
+      /**
+       * Task 14: opens at the last item; while the person is at the end (or one item from it) a new last item scrolls into view;
+       * scrolled up it stays put until they come back. One column, in a list that scrolls itself (a full screen, or a panel with
+       * `layout: "fill"`); drawn flat it does nothing (logged once).
+       */
+      stickToBottom?: KinoScreenResponsive<boolean>;
+      /**
+       * Task 15: items appended while the person is not at the end show Kino's own chip («↓ Nuevos» / «↓ New», never your text)
+       * over the list's bottom; a tap goes to the end and it hides once the end shows. One column, a list that scrolls itself.
+       * On the TV it is a focus stop: Down from the list region reaches it before your controls under the list.
+       */
+      newItemsHint?: boolean })
+  /**
+   * A button: `ElevatedButton` (Kino's primary), `TextButton`, `IconButton` (needs `icon`), or `Button` with its `variant`
+   * (`secondary` has no other name). `submit: true` inside a `Form`: Kino checks the form, then runs the form's `onSubmitted`
+   * (the button's own `onPressed` is ignored).
+   */
+  | (KinoScreenButton & { type: "ElevatedButton" | "TextButton" | "IconButton" })
+  | (KinoScreenButton & { type: "Button"; variant?: KinoScreenResponsive<"primary" | "secondary" | "text" | "icon"> })
+  /** A `TextField` with `maxLines` above 1 (in any size class) or `multiline: true` takes several lines. */
+  | (KinoScreenInput & KinoScreenTextRules & { type: "TextField"; kind?: KinoScreenInputKind; maxLength?: number; value?: string; maxLines?: KinoScreenResponsive<number>; multiline?: boolean; onSubmitted?: KinoScreenAction;
+      /**
+       * Task 8y: an icon inside the field's box at its end (one-line fields only), all three or none: `trailingIcon`,
+       * `trailingLabel` (what a screen reader says, at most 40 characters; `trailingLabelEn` in English) and `onTrailingTap`
+       * (sent like `onSubmitted`, the field's current text as the event's `value`). Never shown on a disabled field.
+       */
+      trailingIcon?: KinoScreenResponsive<KinoIconName>; trailingLabel?: string; trailingLabelEn?: string; onTrailingTap?: KinoScreenAction })
+  | (KinoScreenInput & KinoScreenFieldRules & { type: "DropdownButton" | "RadioGroup"; options: KinoScreenOption[]; value?: string })
+  /** `minLength` / `maxLength` count the chips picked. */
+  | (KinoScreenInput & KinoScreenFieldRules & { type: "Chips"; options: KinoScreenOption[]; multiple?: boolean; value?: string | string[]; minLength?: number; maxLength?: number })
+  | (KinoScreenInput & KinoScreenFieldRules & { type: "Switch" | "Checkbox"; value?: boolean })
+  | (KinoScreenInput & { type: "Slider"; min?: number; max?: number; step?: number; value?: number })
+  | (KinoScreenBase & { type: "TabBar"; tabs: KinoScreenOption[]; value?: string; onChanged?: KinoScreenAction })
+  | (KinoScreenBase & { type: "emptyState" | "errorState"; title: string; titleEn?: string; text?: string; textEn?: string; icon?: KinoIconName })
+  // Kino's own components: data only, drawn with Home's cards and rows. Items are what `home` rows return (KinoItem),
+  // read by the same rules (a series needs the episodes capability; posters and backdrops https only, else Kino's
+  // placeholder); 18+ items show only while the 18+ code is unlocked. At most 1000 titles per tree, and at most 60 in a
+  // grid inside a scroll, list or pop-up, or a rail inside a horizontal scroll (drawn all at once there).
+  /** One Home poster card; without `onTap` it opens the title's page (`go: { title: { ref, kind } }`). */
+  | (KinoScreenBase & { type: "titleCard"; item: KinoItem; size?: KinoScreenResponsive<KinoScreenCardSize> })
+  /** A Home row: a title, 1..500 items, and "Ver más" (`go: { browse: { ref } }`) when `ref` is set. */
+  | (KinoScreenBase & KinoScreenPaging & { type: "titleRail"; title: string; titleEn?: string; items: KinoItem[]; ref?: string; size?: KinoScreenResponsive<KinoScreenCardSize> })
+  /** Home cards in a grid (default 3 columns), 1..500 items. */
+  | (KinoScreenBase & KinoScreenPaging & { type: "titleGrid"; items: KinoItem[]; columns?: KinoScreenResponsive<number> })
+  /** A section's banner: title, text, an https image and at most 2 buttons. */
+  | (KinoScreenBase & { type: "heroCard"; title: string; titleEn?: string; text?: string; textEn?: string; image?: string; buttons?: ((KinoScreenButton & { type: "ElevatedButton" | "TextButton" | "IconButton" }) | (KinoScreenButton & { type: "Button"; variant?: KinoScreenResponsive<"primary" | "secondary" | "text" | "icon"> }))[] })
+  /**
+   * A pop-up declared in the tree (`key` required), drawn only once a `{ open: key }` ui operation opens it. One pop-up at
+   * a time; Back closes it first. An `AlertDialog` or `BottomSheet` takes `children` (an `AlertDialog` also `buttons`); a
+   * `PopupMenuButton` takes 1..8 `items`. `popup` with its `kind` is the same thing.
+   * Task 15 `anchor` (a node's key): drawn next to that node (above it when there is more room above, else below), sized to
+   * its content, over the content and taking no layout space, with no close of its own (Back and a tap outside close it; on
+   * the TV focus goes in, stays there and Back gives it back to the anchor). With no room above or below, or the anchor not on
+   * screen, it falls back to its kind's own place (logged once). A screen-format panel draws a pop-up only with an `anchor`.
+   */
+  | (KinoScreenBase & { type: "AlertDialog"; key: string; title?: string; titleEn?: string; children?: KinoScreenNode[]; buttons?: KinoScreenDialog["buttons"]; anchor?: string })
+  | (KinoScreenBase & { type: "BottomSheet"; key: string; title?: string; titleEn?: string; children?: KinoScreenNode[]; anchor?: string })
+  | (KinoScreenBase & { type: "PopupMenuButton"; key: string; title?: string; titleEn?: string; items: KinoScreenMenuItem[]; anchor?: string })
+  | (KinoScreenBase & { type: "popup"; key: string; kind: "dialog" | "sheet"; title?: string; titleEn?: string; children?: KinoScreenNode[]; buttons?: KinoScreenDialog["buttons"]; onClose?: KinoScreenPopupClose; anchor?: string })
+  | (KinoScreenBase & { type: "popup"; key: string; kind: "menu"; title?: string; titleEn?: string; items: KinoScreenMenuItem[]; onClose?: KinoScreenPopupClose; anchor?: string })
+  /**
+   * A form: its `children` drawn as a column; its fields (every input in it, a pop-up's body excepted) take the rules of
+   * KinoScreenFieldRules. A `submit: true` button submits it: Kino checks every field first, and an invalid form never
+   * calls the plugin (the error shows under each failing field, focus goes to the first). While a required field is
+   * empty the submit button is off. A valid form runs `onSubmitted`: its event's `value` is every field's value by key.
+   * Forms do not nest and an answer's pop-up takes none.
+   */
+  | (KinoScreenBase & { type: "Form"; children?: KinoScreenNode[]; onSubmitted: KinoScreenAction })
+  /**
+   * Kino's own settings form for this plugin, the same one Kino's settings screen shows: every setting type, `devices`,
+   * both languages, validation, Kino's own fields for secrets and its buttons for actions, with its own save. `keys`
+   * shows only those settings, in that order (none: all of them); each setting shows at most once per screen, so a custom
+   * form can drop one in for a secret (`keys: ["password"]`). It sends the plugin no event and its JavaScript never sees
+   * what is typed in it. Never inside a `Form` or an answer's pop-up.
+   */
+  | (KinoScreenBase & { type: "settings"; keys?: string[] })
+  /**
+   * A line of news across the screen in Kino's colour for its `role` (default info), with an optional title, a button
+   * (`action`) and, when `dismissible` (it needs a `key` of its own), Kino's close: it hides the banner at once (in
+   * `state.ui.hidden`) and sends the event `dismiss` with the banner's key as `arg`.
+   */
+  | (KinoScreenBase & { type: "MaterialBanner"; role?: KinoScreenRole; title?: string; titleEn?: string; text: string; textEn?: string; action?: { label: string; labelEn?: string; onTap: KinoScreenAction; arg?: string }; dismissible?: boolean })
+  /**
+   * Sections that open and close: each item's header (its `title`) shows or hides its `children`; one open at a time
+   * unless `multiple`. `key` is required: which items are open lives in `state.ui.open.<key>` (the open item keys), so it
+   * survives a re-render, and the plugin may set it there too; `open` is only the first look. 1..500 items, item keys
+   * valid and distinct. Each item's header and its children count toward the depth and node limits. A required field in a
+   * closed item does not keep a form's submit button off; the submit still checks it and, when it fails, opens its item and
+   * focuses it. Never in an answer's pop-up. On the TV each
+   * header takes focus and OK toggles it.
+   */
+  | (KinoScreenBase & { type: "ExpansionTile"; key: string; items: { key: string; title: string; titleEn?: string; children?: KinoScreenNode[]; open?: boolean }[]; multiple?: boolean })
+  /**
+   * A placeholder while something loads, in Kino's muted colour: a `line` (`lines` bars, 1..6), a `block`, a `circle` or a
+   * `card` (a poster and its lines); size it with `width`/`height`. It pulses gently, and stands still when the system's
+   * animations are off; a screen reader says Kino's "Loading".
+   */
+  | (KinoScreenBase & { type: "Skeleton"; shape?: KinoScreenResponsive<"line" | "block" | "circle" | "card">; lines?: KinoScreenResponsive<number> })
+  /**
+   * A QR code drawn by Kino itself (on the device, no network), black on white with its quiet zone, at one of Kino's three
+   * sizes. `value`: 1..1000 characters, drawn as written; an empty or longer one is dropped (logged). A value holding one
+   * of your plugin's secrets is never drawn: Kino shows its empty state instead (logged). `labelText` is what a screen
+   * reader says. Never pressable (its `onTap` and `onLongPress` are ignored) and never focused; it may sit in an answer's
+   * `dialog` or `sheet` body or a declared pop-up.
+   */
+  | (KinoScreenBase & { type: "QrImage"; value: string; labelText?: string; labelTextEn?: string; size?: KinoScreenResponsive<KinoScreenCardSize> })
+  /**
+   * A number drawn `[ − ] value [ + ]` (not Flutter's `Stepper`, a wizard: that name is unknown here): each press moves it
+   * by `step` (default 1), kept within `min`..`max` (min below max) and rounded to `decimals` places (0..6); a button at its
+   * limit is off; holding it repeats, slowly faster. Its value is in `state.inputs.<key>` as text: a `.` for decimals, no
+   * grouping, exactly `decimals` places ("2.50"). `onChanged` goes with each press (the newest of a quick run, like any
+   * change). `editable: true` also lets the person type it, with Kino's digits-only entry (the TV's number pad, the phone's
+   * number keyboard): only with `decimals` 0 and a `min` of 0 or more, otherwise ignored (logged). Inside a `Form` it is a
+   * field (`required`, `errorText`). No `bind` in this version (ignored, logged). Its numbers are at most 1e15 either way
+   * (larger ones are clamped, logged). On the TV Left and Right move between −, the value and +.
+   */
+  | (Omit<KinoScreenInput, "bind"> & KinoScreenFieldRules & { type: "NumberStepper"; value?: number; min?: number; max?: number; step?: number; decimals?: number; editable?: boolean })
+  /**
+   * A table in Kino's own look: `children` are `TableRow`s (1..200), each with `TableCell`s. `columns` (at most 20) gives
+   * each column its share of the width (`flex` 1..12, default 1); without it the table has as many columns as its widest row
+   * spans. `header: true` makes the first row the header (bold, read as headings, a stronger rule under it); a rule under
+   * every row; `zebra: true` paints every other row with Kino's surface. On a compact width the table scrolls sideways
+   * (the table at least 96 dp per column, shared by flex) unless `wrap: true`. A row with fewer cells is padded; cells past the last column are
+   * dropped and a span past it is cut (logged), for each size class with its own columns. Each row and each cell counts
+   * toward the 600 nodes. Every property takes a per-size map: the flags, `columns`, a column's `flex`, a cell's `colSpan`
+   * and `crossAxisAlignment`. It takes no focus: on the TV the D-pad walks only what is focusable inside its cells.
+   */
+  | (KinoScreenBase & { type: "DataTable"; columns?: KinoScreenResponsive<{ key?: string; flex?: KinoScreenResponsive<number> }[]>; header?: KinoScreenResponsive<boolean>; wrap?: KinoScreenResponsive<boolean>; zebra?: KinoScreenResponsive<boolean>; children: KinoScreenTableRow[] });
+
+/** What every button takes: `labelText` (not for an `IconButton`), `icon` (a Kino icon name), `onPressed`. */
+type KinoScreenButton = Omit<KinoScreenBase, "onTap"> & { labelText?: string; labelTextEn?: string; icon?: KinoIconName; confirm?: string; confirmEn?: string; submit?: boolean; onPressed?: KinoScreenAction };
+
+/**
+ * A table row: its cells (at most 20), whose `colSpan`s fill the table's columns. `key` (unique among the screen's keys) lets a
+ * `ui` show, hide or toggle operation name the row; `hidden` starts it hidden.
+ */
+interface KinoScreenTableRow { type: "TableRow"; key?: string; hidden?: boolean; children?: KinoScreenTableCell[] }
+/**
+ * A table cell: a plain `text` (`textEn` its English twin) or `children` (nodes, one level below the table: no `ListView`,
+ * `SingleChildScrollView` or `DataTable` at any depth, those are dropped and logged; an `ExpansionTile` may sit there and
+ * grows its row; with a `text` the children are ignored). `crossAxisAlignment` places its content across its width (start);
+ * `colSpan` 1..8 (default 1; above 8 it is 8). Both may be per-size maps.
+ */
+interface KinoScreenTableCell { type: "TableCell"; text?: string; textEn?: string; children?: KinoScreenNode[]; crossAxisAlignment?: KinoScreenResponsive<"start" | "center" | "end">; colSpan?: KinoScreenResponsive<number> }
+
+/*
+ * The older spellings, still accepted (Kino reads them as the names above; nothing changes in what is drawn): the types
+ * `col` (Column), `row`, `box` (Stack), `card`, `spacer` (Spacer and SizedBox), `divider`, `scroll` (SingleChildScrollView),
+ * `grid` (GridView), `text`, `image`, `icon`, `badge`, `progress` (LinearProgressIndicator), `loading`
+ * (CircularProgressIndicator), `list` (ListView), `button` (Button), `textInput` and `textArea` (TextField), `dropdown`
+ * (DropdownButton), `toggle` (Switch), `checkbox`, `radioGroup`, `slider`, `chips`, `tabs` (TabBar), `popup` with `kind`
+ * (AlertDialog, BottomSheet, PopupMenuButton), `form`, `banner` (MaterialBanner), `accordion` (ExpansionTile), `skeleton`,
+ * `qr` (QrImage), `stepper` (NumberStepper), `table`, `tr`, `td` (DataTable, TableRow, TableCell); the properties `w`, `h`,
+ * `minH`, `justify`, `align`, `weight`, `radius`, `onChange`, `onSubmit`, `hint`, `label` (and their `...En`), and a button's
+ * `onTap`. Give one spelling: when a node has both, the Flutter-style one wins and Kino logs the clash. Log lines name the
+ * older spelling. A name Kino does not know (Flutter's `Stepper` too) drops the node, logged.
+ */
+
+/**
+ * How a player panel's body holds the tree (Task 14, apiVersion 14). "scroll" (the default): the body scrolls, the tree has no
+ * height limit (a `ListView` draws flat, `flex` does nothing). "fill": the root is drawn at the body's size with no body scroll;
+ * `flex` shares the height left and a `ListView` with `flex` is lazy and scrolls itself (a chat: messages over an input row at
+ * the bottom). When the parts without `flex` alone are taller, that render is drawn as "scroll" (logged once). A full screen's
+ * root is always drawn at the screen's size. Any other value is logged and read as "scroll".
+ */
+type KinoScreenLayout = "scroll" | "fill";
+
+/** `screen` may return its tree with `every` on the root (the screen's timers, KinoScreenTimer) and its `layout` (Task 14). */
+type KinoScreenRoot = KinoScreenNode & { every?: KinoScreenTimer | KinoScreenTimer[]; layout?: KinoScreenLayout };
+
+/** A title card's or rail's size. */
+type KinoScreenCardSize = "small" | "medium" | "large";
+/** One action of a menu pop-up: a label, an optional Kino icon, and what a press does (the menu closes first). */
+interface KinoScreenMenuItem { label: string; labelEn?: string; icon?: KinoIconName; onTap: KinoScreenAction; arg?: string }
+
+/** A pop-up drawn by Kino over the canvas: `body` is text or nodes; at most 3 buttons, one without `event` closes it. */
+interface KinoScreenDialog {
+  title?: string; titleEn?: string; body?: string | KinoScreenNode[]; bodyEn?: string;
+  buttons?: { label: string; labelEn?: string; event?: string; arg?: string; variant?: "primary" | "secondary" | "text" }[];
+}
+
+/**
+ * What `screenEvent` answers; every field optional, `null` means nothing to do. `state` is a patch merged key by key
+ * (`null` removes a key; at most 64 KB) after which Kino calls `screen` again; `route` goes to another screen of this plugin.
+ */
+interface KinoScreenAnswer {
+  state?: Record<string, unknown> | null;
+  /** One pop-up at a time: with more than one of dialog, sheet and menu, the dialog wins, then the sheet. */
+  dialog?: KinoScreenDialog | null;
+  /** A bottom sheet on the phone, a side drawer on the TV. */
+  sheet?: { title?: string; titleEn?: string; body?: string | KinoScreenNode[]; bodyEn?: string } | null;
+  /** A short list of actions (1..8). */
+  menu?: { title?: string; titleEn?: string; items: KinoScreenMenuItem[] } | null;
+  /**
+   * A short message at the bottom (one at a time: a newer one replaces it). A string, or `{ text, role, action, ms }`: `ms`
+   * 2000..8000 (default 3500), `action` a button whose event (with its `arg`) Kino sends once. On the TV the toast never takes
+   * focus by itself: Down from the bottom of the screen reaches its action, and the remote's Menu (or Play/Pause) runs it.
+   */
+  toast?: string | { text: string; textEn?: string; role?: KinoScreenRole; action?: { label: string; labelEn?: string; event: string; arg?: string }; ms?: number } | null; toastEn?: string;
+  go?: KinoScreenGo | null;
+  route?: { push: string; params?: Record<string, unknown> } | { pop: true } | null;
+  close?: boolean;
+  focus?: string | null;
+  /**
+   * The plugin's own settings to write, by key, through Kino's settings (the same store and sync as its settings screen;
+   * written before the `screen` call the answer asks for, so `kino.config` reads the new value). Only keys the manifest
+   * declares in `settings`, at most 32 (sorted), with a value that fits: a `text` a string (trimmed; blank or `null` empties
+   * it, unless required), a `toggle` a boolean, a `select` one of its option values, a `list` an array of records of its
+   * fields that adds no address to its `url` fields (entries may be removed, reordered or retitled). Never a `url` (only the
+   * person types an address, in the `settings` node), a `password`, an `action` or a `help` setting, and never a value holding
+   * one of the plugin's secrets. Anything else is dropped and logged. Toggles and selects keep the plugin's web session; any
+   * other write restarts it as Kino's Guardar does. Each setting is written at most once every 500 ms.
+   */
+  config?: Record<string, string | boolean | Record<string, string>[] | null> | null;
+  /**
+   * Local operations the answer runs (apiVersion 14, Task 7i-2), the same as an action's `ui` (at most 8). `{ open: key }`
+   * opens a declared `popup`; when the answer also changes `state`, it opens once the new tree is drawn, so the pop-up shows
+   * its new body from its first frame (Back before then cancels it). `{ close: key }` closes it at once, for example after
+   * the pop-up's Save. A timer's answer drops `ui`.
+   */
+  ui?: KinoScreenUiOp[];
+}
+
+/** The screen the person is on: `{ name: "main", params: {} }` at the root, else the last `route.push` and its params. */
+/** `args` only on the route the screen opened at, when a `go.screen` gave it some (Task 7g). */
+type KinoScreenRoute = { name: string; params: Record<string, unknown>; args?: Record<string, unknown> };
+
+/**
+ * `screen` -- required with the capability "screen": a pure view, the tree for this state (called on open and after every state patch).
+ * `state.ui` holds what Kino did locally: `hidden` and `enabled` (by node key) and `open` (each accordion's open item keys).
+ * `state.inputs` holds every input on screen by key: what the person or the plugin set, else the value the last tree shows
+ * (toggle/checkbox a boolean, slider a number, dropdown/radioGroup the option value or null, chips an array when multiple,
+ * stepper its value as text).
+ * Events arrive one at a time, spaced 100 ms apart, never dropped for coming fast. Inside `screen` and `screenEvent`,
+ * `kino.config.get/all` read the settings as stored now (a bound field's write or a `config` answer included).
+ */
+type KinoScreenFn = (arg: {
+  state: Record<string, unknown>; route: KinoScreenRoute; device: KinoScreenDevice;
+  size: { widthClass: KinoScreenSizeClass; heightClass: KinoScreenSizeClass; orientation: "portrait" | "landscape" };
+  lang: "es" | "en";
+}) => Promise<KinoScreenRoot>;
+
+/**
+ * apiVersion 14, capability "schedule" (Task 8q): what `job(ctx)` receives. `id` is the manifest job's id; `reason` is
+ * "scheduled" (its periodic work fired) or "manual" (the person pressed "Ejecutar ahora"); `lastRunMs` is when this job last ran
+ * on this device (null before its first run); `attempt` is 1 plus its failures in a row.
+ */
+interface JobContext {
+  id: string;
+  reason: "scheduled" | "manual";
+  lastRunMs: number | null;
+  attempt: number;
+}
+
+/**
+ * One entry of the manifest's `jobs` (apiVersion 14, Task 8q; `runOn`, Task 8q-2). `runOn: "any"` (the default): every device
+ * that has the plugin runs it, for its own `kino.storage`. `runOn: "preferPhone"`: ONE of the person's linked devices runs it, a
+ * linked phone first (a TV never runs it while a fresh phone can; it takes over when the phone stops for two periods), and the
+ * job writes its result with `kino.shared` so the other devices read it. Read `kino.device` in the job to pick a lighter batch on
+ * a TV (Kino enforces nothing extra; the job's caps apply).
+ */
+interface KinoJobDecl {
+  id: string;
+  label: { es: string; en?: string };
+  everyMin: number;
+  everyOptions: number[];
+  runOn?: "any" | "preferPhone";
+}
+
+/**
+ * `job` -- required with the capability "schedule": one background run, headless (no screen, nothing shown; its answer is never
+ * read). Keep what you fetched in `kino.storage`; your screens read it when they open. At most 20 s, 10 `kino.fetch`es (one at a
+ * time), 2 MB of answer bodies (an answer that would cross it is refused with `too_large`) and 256 KB (UTF-8) written to
+ * `kino.storage` per run (a cap crossed cuts the run: a failure). An allow-list: only `kino.fetch`, `kino.storage`, `kino.log`,
+ * `kino.config` (read), `kino.cookies`, `kino.crypto`, `kino.sleep`, `kino.html`, `kino.secret`, `kino.error`, `kino.rank` and
+ * `kino.library` (with its own approval) and `kino.shared` (Task 8q-2) work, plus the plain values (`kino.apiVersion`, `kino.device`...); everything else
+ * (`kino.room`, `kino.qr`, `kino.browser`, `kino.ws`, `kino.meta`, `kino.tmdb`, `kino.nuvio`, `kino.catalog`, `kino.seed`,
+ * `kino.sync` and any later API) rejects with `not_allowed`.
+ */
+type KinoJobFn = (ctx: JobContext) => Promise<unknown>;
+
+/** `screenEvent` -- required with the capability "screen": a node's event (the first one is the reserved `open`). */
+type KinoScreenEventFn = (arg: {
+  name: string; arg?: string; value?: unknown; state: Record<string, unknown>; route: KinoScreenRoute; device: KinoScreenDevice; lang: "es" | "en";
+}) => Promise<KinoScreenAnswer | null>;
+
+// ---------- the player panel built with the screen kit (Task 8i, opt-in per result, apiVersion 14) ----------
+
+/**
+ * What `panel(context)` may return instead of a `KinoPanel`: the same drawer (its title, tabs and `refreshMs`) with a body built
+ * from the screen nodes (`root`: Flutter-style names or aliases, forms, tabs, lists, tables, the settings node, qr, banner...).
+ * A result without `format` is the legacy panel, unchanged; the format may change from one call to the next. Needs apiVersion
+ * 14 (below it Kino reads the result as a legacy panel, logged). Answer it only when `context.features` includes "screen":
+ * Kino puts it there only while plugin screens are on (with them switched off a screen-format result shows no panel, so
+ * answer a legacy one then); an older Kino never sends it.
+ * Limits: depth 6, 200 nodes (the legacy panel keeps its own); a `popup` node is dropped (pop-ups belong to the screen, not
+ * to the drawer). `refreshMs` (2000..60000) is THE periodic call, as in the legacy panel: `every` is dropped here, logged. With
+ * plugin screens switched off a screen-format result shows no panel (a legacy one still does).
+ */
+interface KinoPanelScreenResult {
+  format: "screen";
+  root: KinoScreenNode;
+  /** Up to 60 characters. */
+  title?: string; titleEn?: string;
+  /** `#RRGGBB`, the legacy panel's rule. */
+  accent?: string;
+  /** Kino calls `panel` again every so often (2000..60000 ms), only while the panel is open: e.g. live scores. */
+  refreshMs?: number;
+  /** At most 6, as the legacy panel's; a tab press calls `panel` again with `context.tab`. */
+  tabs?: { id: string; label: string; labelEn?: string; badge?: KinoScreenBadge }[];
+  tab?: string;
+  /** Task 8j: as `KinoPanel.player`: counts only with the `playerControl` capability. */
+  player?: KinoPlayerAction;
+  /** Task 14: how the body holds `root` (KinoScreenLayout); "fill" for a chat tab. Here, never on `root`. */
+  layout?: KinoScreenLayout;
+}
+
+/**
+ * The context of an apiVersion 14 plugin's panel calls: exactly `KinoPanelContext` (`device` "tv" | "phone", `lang` "es-CO"
+ * style) plus the screen part, in every call, the first one included (Kino cannot know the format before the answer):
+ * `state` (Kino's, kept for this title's playback: `inputs`, `ui` and your keys, as a screen's) and `size` (the drawer's size
+ * classes; before the drawer measured itself, Kino's estimate). `playerEvent`'s context stays the legacy one.
+ */
+interface KinoPanelScreenContext extends KinoPanelContext {
+  state: Record<string, unknown>;
+  size: { widthClass: KinoScreenSizeClass; heightClass: KinoScreenSizeClass; orientation: "portrait" | "landscape" };
+}
+
+/**
+ * Task 11 (apiVersion 14): the context of a tab you contribute (`"kinds": ["live"]`) on an En vivo channel. Exactly these keys:
+ * live has no ref, title, ids, position, duration, pause, stats or player block. `channel.provider` is the id of the plugin
+ * that lists the channel, `channel.code` its id there, `channel.name` its listed name: pass the first two to
+ * `go.liveChannel` to tune another device to it. Sent only for a channel its provider's listing confirmed as not 18+, never
+ * for «Mis canales» (the person's own lists). On a zap Kino calls `panel` again with the new channel (a render, never a
+ * press); the panel stays open. Your `player` actions are dropped whole (live_channel); no `playerEvent` on live.
+ * `values.video` is one set for every live channel (the session stays open across zaps). In screen mode `state` and `size` come too, as in `KinoPanelScreenContext`.
+ */
+interface KinoLivePanelContext {
+  kind: "live";
+  live: true;
+  channel: { provider: string; code: string; name: string };
+  foreign: true;
+  source: { pluginId: string; name: string };
+  device: "tv" | "phone";
+  lang: string;
+  tab?: string;
+  values: { video: Record<string, KinoPanelValue>; plugin: Record<string, KinoPanelValue> };
+  features?: ("loading" | "screen")[];
+  state?: Record<string, unknown>;
+  size?: { widthClass: KinoScreenSizeClass; heightClass: KinoScreenSizeClass; orientation: "portrait" | "landscape" };
+}
+
+/**
+ * A screen-format panel's event to `panelAction(event, context)`: a node's action. `trigger` is "press" (a tap or a long
+ * press), "change" or "submit"; `name` and `arg` are the node's event; `key` the input that fired (absent for a tap); `values`
+ * the inputs' values (`context.state.inputs`). "tab" and "open" stay reserved.
+ */
+interface KinoPanelScreenEvent {
+  key?: string;
+  trigger: "press" | "change" | "submit";
+  name: string;
+  arg?: string;
+  value?: unknown;
+  values: Record<string, unknown>;
+}
+
+/**
+ * What `panelAction` answers while the panel is in screen mode (`null` is nothing to do): the screen answer's fields that make
+ * sense in a drawer, and the legacy panel's `player`, `message`, `pause` and `panel`. `state` is merged and `panel` asked again
+ * with it; `ui` runs Kino's local operations; `config` writes your settings (the screen's rules); `go` takes every shape
+ * (title, play, search, browse, section, categories: the panel closes and Kino goes there; `screen`: your screen over the
+ * player, `pause` pauses the video; `close`, like `close: true`, closes the panel). `panel` is a whole new result, either format.
+ * `dialog`, `sheet`, `menu` and `route` are not honoured inside the panel; `patch`, `values` and `save` are legacy-only: all
+ * dropped, logged. A `playerEvent` answer's `panel` (either format) shows in the open panel of that title too (apiVersion 14
+ * and later; logged when no panel of that title is open), but a `playerEvent` answer's `state` is never applied: keep it in
+ * your own variables (or `kino.storage`) or answer a `panel` built from it. A toast's action on the TV runs from the remote's
+ * Menu or Play/Pause key, wherever focus is in the drawer (it never takes focus).
+ */
+interface KinoPanelScreenAnswer {
+  state?: Record<string, unknown> | null;
+  toast?: KinoScreenAnswer["toast"]; toastEn?: string;
+  ui?: KinoScreenUiOp[];
+  config?: KinoScreenAnswer["config"];
+  go?: KinoScreenGo | null;
+  close?: boolean;
+  focus?: string | null;
+  player?: KinoPlayerAction;
+  message?: string;
+  pause?: boolean;
+  panel?: KinoPanel | KinoPanelScreenResult;
+}
 
 /**
  * Configuration aids in the manifest's `settings` (apiVersion 12; no value, never in kino.config, never required).
@@ -758,6 +1683,15 @@ type KinoManifestSetting =
        * A text one is still drawn as a plain text field (nothing masked). Default `true`.
        */
       sync?: boolean;
+      /**
+       * apiVersion 14, on a `toggle` or a `select` only: `"adultCode"` makes Kino ask the device's 18+ code (its own prompt, phone
+       * and TV) before the person moves this setting AWAY from its `default` in Kino's settings form (Ajustes, or a screen's or
+       * panel's `settings` node); back toward the default never asks. A wrong code or Cancelar keeps the old value; you never see
+       * the code. Your own writes may only move it toward the default (an answer's `config` or an action's `setSettings` away
+       * from it is refused), and no field may `bind` it: show it with `{ type: "settings", keys: ["<key>"] }`. The value syncs
+       * like any setting; the code is asked on each device at the moment of the change.
+       */
+      unlockWith?: "adultCode";
     }
   | KinoLinkSetting
   | KinoHelpSetting;
@@ -773,14 +1707,24 @@ interface KinoPlugin {
    * apiVersion 9, required when the manifest declares `panel`: the panel the button opens. Called with the context when it
    * opens, on a tab press and every `refreshMs`. 20 s per call; a panel that is not an object shows nothing.
    */
-  panel?(context: KinoPanelContext): Promise<KinoPanel>;
-  /** apiVersion 9, optional: a button pressed, an input changed or submitted. Called with TWO arguments, `(event, context)`. 20 s per call. */
-  panelAction?(event: KinoPanelEvent, context: KinoPanelContext): Promise<KinoPanelAnswer | null | void>;
+  panel?(context: KinoPanelContext | KinoPanelScreenContext | KinoLivePanelContext): Promise<KinoPanel | KinoPanelScreenResult>;
+  /**
+   * apiVersion 9, optional: a button pressed, an input changed or submitted. Called with TWO arguments, `(event, context)`. 20 s
+   * per call. While the panel is in screen mode (Task 8i) the event is a `KinoPanelScreenEvent` and the answer a `KinoPanelScreenAnswer`.
+   */
+  panelAction?(event: KinoPanelEvent | KinoPanelScreenEvent, context: KinoPanelContext | KinoPanelScreenContext | KinoLivePanelContext): Promise<KinoPanelAnswer | KinoPanelScreenAnswer | null | void>;
   /**
    * apiVersion 9, optional, needs no `panel`: told about the playing title's player events (fire and forget: 5 s, at most one
-   * in flight, events coalesce). May answer a `player` action or a `message`; anything else is ignored. `(event, context)`.
+   * in flight, events coalesce). May answer a `player` action, a `message` or (Task 8i, apiVersion 14 and later) a new
+   * `panel` for the open panel; anything else is ignored (a `state` is never applied; below apiVersion 14 a `panel` too).
+   * `(event, context)`.
    */
   playerEvent?(event: KinoPlayerEvent, context: KinoPanelContext): Promise<KinoPanelAnswer | null | void>;
+  /**
+   * apiVersion 14, required with "schedule" (Task 8q): one run of one of the manifest's `jobs`, in the background (see
+   * `KinoJobFn` and `JobContext`). 20 s per run; the answer is ignored.
+   */
+  job?(ctx: JobContext): Promise<unknown>;
   /** apiVersion 6, optional, needs `browse`: up to 24 tiles in Categorías, in your order. 20 s per call. */
   categories?(arg: null): Promise<KinoCategory[]>;
   /** With `query.within` (capability "scopedSearch", apiVersion 6): null = "can't search inside this page". 15 s per call. */
@@ -1151,6 +2095,20 @@ interface KinoFetchOptions {
   cookies?: boolean;
   /** Default 15000, at most 30000. */
   timeoutMs?: number;
+  /**
+   * apiVersion 14: read at most this many bytes of the body (1 to 2,000,000), then stop: the rest is never downloaded and
+   * the answer's `truncated` is true (a plugin with sealed `secrets` gets the same answer, but the body is read whole, up to
+   * 5 MB, and redacted before the cut). Bytes after decompression; a cut text may end inside a character. Out of range:
+   * `invalid_request`. Below apiVersion 14 the option is ignored.
+   */
+  maxBytes?: number;
+  /**
+   * apiVersion 14: end the read as soon as the text holds this marker (1 to 32 printable ASCII characters, ASCII
+   * case-insensitive), keeping everything up to and including it; `truncated` is true when more followed. Text responses
+   * only (a byte answer fails with `invalid_request`). With `maxBytes`, whichever comes first. Below apiVersion 14 ignored.
+   * Example: `{ stopAt: "</head>", maxBytes: 65536 }` reads a page's head and nothing more.
+   */
+  stopAt?: string;
 }
 
 interface KinoResponse {
@@ -1163,6 +2121,8 @@ interface KinoResponse {
   json(): any;
   /** The body bytes (at most 5 MB) as base64. */
   base64(): string;
+  /** apiVersion 14: true when the body was cut at the request's `maxBytes` (false otherwise; absent below 14). */
+  readonly truncated?: boolean;
 }
 
 interface KinoHtmlMatch {
@@ -1319,6 +2279,133 @@ interface CsLink {
   linkType: "VIDEO" | "M3U8" | "DASH";
   headers: Record<string, string>;
 }
+
+/** apiVersion 14, capability `"ai"` (Task 8r): what `kino.ai.ask` takes (contract.json `kinoAi`). */
+interface KinoAiAskOptions {
+  /** The text to send: a non-empty string of at most 8192 UTF-8 bytes. It leaves the device: say so in your own UI. */
+  prompt: string;
+  /** Your instructions to the model, at most 2048 UTF-8 bytes. Kino adds no persona of its own. */
+  system?: string;
+  /** true ASKS the model for JSON only; the reply still comes back as the model wrote it, parseable or not. */
+  json?: boolean;
+  /** The reply is cut at this many characters: a whole number from 1 to 4096 (default 2048). */
+  maxChars?: number;
+}
+
+/**
+ * apiVersion 14, capability `"ai"`: what `kino.ai.ask` answers. Never thrown: a failure is `ok: false` with one of the codes;
+ * `message` is Kino's English detail for you, never for the person. `model` is only the name of the model that answered.
+ */
+type KinoAiAnswer =
+  | { ok: true; text: string; model: string }
+  | { ok: false; error: "unavailable" | "rate_limited" | "too_large" | "timeout" | "refused"; message: string };
+
+/**
+ * apiVersion 14, capability `"library"`: one title the person watched or saved, as `kino.library` gives it (contract.json
+ * `kinoLibrary`). Nothing else ever comes: no stream, no plugin ref, no Kino id, no profile.
+ */
+interface KinoLibraryEntry {
+  /** The title's name as Kino shows it (TMDB's when Kino identified it), at most 200 characters. */
+  title: string;
+  /** Only when Kino knows it (a saved title's card year); usually absent on a watched one. */
+  year?: number;
+  kind: "movie" | "series";
+  /** Each only when Kino knows it; may be empty. */
+  ids: { tmdb?: number; imdb?: string };
+  /** `watched` only: how far the most recent playback of this title went, 0..1 in steps of 0.01 (1 when finished). */
+  progress?: number;
+  /** `watched` only: when it was last played, rounded down to the day (UTC midnight, ms since the epoch). */
+  watchedAtMs?: number;
+}
+
+/** `kino.library.watched`'s options: `limit` 1..100 (default 50; above 100 gives 100), `kind` filters, `sinceMs` keeps titles played on that day (UTC) or later: it is rounded down to the day, like `watchedAtMs`. A number that is not finite is `bad_request`. */
+interface KinoLibraryWatchedOptions { limit?: number; kind?: "movie" | "series"; sinceMs?: number }
+
+/** `kino.library.saved`'s options: `limit` 1..100 (default 50), `kind` filters. */
+interface KinoLibrarySavedOptions { limit?: number; kind?: "movie" | "series" }
+
+/** What `kino.library` throws (contract.json `kinoLibrary.errorCodes`). */
+type KinoLibraryErrorCode = "permission_denied" | "rate_limited" | "bad_request";
+
+/** apiVersion 14, `kino.room.open`'s options. */
+interface KinoRoomOpenOptions {
+  /** Minutes the room lives, 10..240 (default 120). The endpoint and its internet route close when it is over. */
+  ttlMin?: number;
+  /** Members including you (the host), 2..8 (default 6). */
+  max?: number;
+  /** Your name as the guests see it, at most 40 characters (control and direction characters removed). */
+  name?: string;
+  /**
+   * Task 8w: a shorter numeric code, 4..12 digits (default 12; anything else is `bad_request`). A short code (a friends'
+   * Watch Party) keeps strangers out only because the words cannot be guessed and the room closes itself after 30 wrong codes;
+   * whoever captures the traffic and knows the words (the tunnel provider) recovers a 4-digit code offline in milliseconds,
+   * so such a room is NOT private from the provider. The default 12 digits makes that expensive, not impossible.
+   */
+  codeDigits?: number;
+  /**
+   * Open ANOTHER door to a room you are in (a backup endpoint with its own words): the room's code. Refused
+   * (`permission_denied`) unless this plugin is a member of a room with that code right now, or opened it itself. Its
+   * expiry is capped at the room's.
+   */
+  code?: string;
+}
+
+/** What `kino.room.open` answers. Show `words` and `code` to the person (or send `words` to the members in a message). Never a URL. */
+interface KinoRoomOpened {
+  /** The room's secret: 12 digits, or the `codeDigits` you asked for. Show it grouped (`1234 5678 9012`); spaces and hyphens are ignored on `join`. */
+  code: string;
+  /** The endpoint's public words (`brave-river-cat-moon`). Anyone may see them; the code is what lets people in. */
+  words: string;
+  expiresAtMs: number;
+}
+
+/** apiVersion 14, `kino.room.join`'s options: the words and code the host's person shared, and the name the others see (at most 24 characters). */
+interface KinoRoomJoinOptions { words: string; code: string; name?: string }
+
+/** What `kino.room.join` answers. Keep `handle`: it names this session in `send`, `inbox`, `members` and `close`. */
+interface KinoRoomJoined {
+  handle: string;
+  memberId: string;
+  host: { name: string };
+  expiresAtMs: number;
+}
+
+/** `"hosted"` (the room this device hosts) or a `handle` from `join`. Absent: the first joined session, else the hosted one. */
+type KinoRoomSession = string;
+
+/** `kino.room.send`'s options. The host may write to one `memberId` or everyone (absent or `"all"`); a guest to the host (absent or `"host"`) or `"all"`. */
+interface KinoRoomSendOptions { to?: string; session?: KinoRoomSession }
+
+/** `kino.room.inbox`'s options: events after `since` (pass the last answer's `last`), at most `limit` (1..50, default 50). */
+interface KinoRoomInboxOptions { since?: number; limit?: number; session?: KinoRoomSession }
+
+/** One mailbox event: a message, someone joining or leaving, or the room closing. `seq` only grows. */
+interface KinoRoomEvent {
+  seq: number;
+  /** A `memberId`, or `"host"`. */
+  from: string;
+  kind: "msg" | "join" | "leave" | "closed";
+  /** `msg` only: the object the sender passed to `send`, as Kino re-serialised it. Never executed by Kino; treat it as untrusted data. */
+  payload?: object;
+  /** `join` only: the member's display name. */
+  name?: string;
+}
+
+/** What `kino.room.inbox` answers. `reachable` is false when a guest's last poll of its host got no answer (your failover cue). */
+interface KinoRoomInbox { events: KinoRoomEvent[]; last: number; more: boolean; reachable: boolean }
+
+/** A room member: never an address, only the id Kino gave it, its chosen name, and whether it is the host. */
+interface KinoRoomMember { memberId: string; name: string; host: boolean }
+
+/** What `kino.room.state` answers: this plugin's sessions on this device. */
+interface KinoRoomState {
+  role: "host" | "guest" | "none";
+  joined: { handle: string; memberId: string; host: { name: string }; expiresAtMs: number; reachable: boolean }[];
+  hosted: { code: string; words: string; expiresAtMs: number; members: number } | null;
+}
+
+/** What `kino.room` throws (contract.json `kinoRoom.errorCodes`); `room_unreachable` and the room refusals carry Kino's own `userMessage`. */
+type KinoRoomErrorCode = "room_denied" | "room_closed" | "room_full" | "room_unreachable" | "room_busy" | "rate_limited" | "permission_denied" | "bad_request";
 
 /** apiVersion 13, `kino.ws.open`: a connected WebSocket carrying binary messages. */
 interface KinoWebSocket {
@@ -1529,6 +2616,116 @@ declare namespace kino {
   }
 
   /**
+   * apiVersion 14, needs `"library"` in the manifest's `capabilities` (declarative, no export). What the person watched and saved
+   * in Kino, read-only, from the profile in use: never another profile, never an 18+ title (even with the 18+ code unlocked),
+   * never a stream URL or another plugin's ref. Newest first, one entry per title (a series' chapters fold into one).
+   * The person approves it at install, and again on the update that adds it, on a RED consent line: "Podrá leer lo que has
+   * visto y guardado en Kino, y enviarlo a sus servicios" / "Can read what you have watched and saved in Kino, and send it to
+   * its services", next to your declared hosts. They can switch it off later in your tab in Ajustes; every call then rejects
+   * with `permission_denied` until they switch it back on. Only inside a call the person started (`screen`, `screenEvent`,
+   * `home`, `section`, `search`); any other call (background, prewarm, sync, `resolve`) rejects with `permission_denied`.
+   * At most 30 calls a minute per plugin (both functions together), then `rate_limited`; a wrong option is `bad_request`. A
+   * screen's timer ticks (`screen.every`) count as the person's use while the screen is in front. A call Kino has abandoned
+   * (timed out, or its screen closed) gets `permission_denied`. If you build Home rows from these titles, Kino caches that answer
+   * like any Home.
+   * Kino keeps nothing for you: store only what you need, and only in your own storage. Present on every apiVersion 14 runtime:
+   * feature-detect with `typeof kino.library === "object"` (the Node kit answers from `KINO_LIBRARY_FIXTURE`).
+   */
+  namespace library {
+    /** The titles played, most recent first. */
+    function watched(options?: KinoLibraryWatchedOptions): Promise<KinoLibraryEntry[]>;
+    /** The titles saved (the heart on a title's page), most recently saved first: no `progress` and no `watchedAtMs`. */
+    function saved(options?: KinoLibrarySavedOptions): Promise<KinoLibraryEntry[]>;
+  }
+
+  /**
+   * apiVersion 14, capability `room` (Task 8l): a short-lived mailbox hosted on the person's OWN device and reached from the
+   * Internet through the same Cloudflare quick tunnel Kino opens for "Recibir configuración". Kino is only the transport: who
+   * leads, what a message means and failover are yours. The person approves it at install, and again on the update that adds
+   * it, on a RED consent line: "Podrá abrir una sala a la que se entra por internet a través de este aparato, y enviar los
+   * mensajes de la sala a quienes entren" / "Can open a room that people reach over the Internet through this device, and send
+   * the room's messages to whoever joins". They can switch it off in your tab in Ajustes ("Dejar que abra salas por internet"),
+   * which closes your rooms at once; every call then rejects with `permission_denied`.
+   *
+   * - `open` and `join` only from the person's own action: a `screenEvent` or a `panelAction` (never a screen timer tick or a
+   *   panel refresh). `send`, `inbox` and `members` from an open screen or panel (`screen`, `screenEvent`, `panel`,
+   *   `panelAction`, `playerEvent`; ticks and `refreshMs` included), with Kino in front. Never a background call.
+   * - Poll `inbox` from your panel's `refreshMs` (2000 or more) or a screen's `every`; nothing is pushed into a closed runtime.
+   * - A payload is a JSON object of at most 8192 UTF-8 bytes and 4 levels; at most 5 messages a second, 100 and 256 KB a
+   *   minute per member. Kino never executes or stores it.
+   * - A device holds at most two joined sessions and one hosted room, and one plugin at most two of those three (`room_busy`);
+   *   a `join` with the code of a session you
+   *   are in replaces it (moving to a backup endpoint). Publish a backup's `words` a few seconds after `open` (a fresh name
+   *   takes a moment to resolve; `join` retries for 20 s).
+   * - The room closes on `close`, at its TTL, if your plugin is removed, disabled or switched off, or if Kino stays in the
+   *   background 30 minutes (while your room is hosted, Android shows Kino's notification «Sala abierta · N personas» with
+   *   «Cerrar sala» and keeps it alive meanwhile). Guests silent for 2 minutes are dropped (`leave`).
+   * - Five wrong codes lock new joins for 60 s, then 120 s, ... (`rate_limited`, with Kino's `userMessage`); members already in
+   *   keep going. After 30 wrong codes in all the room closes itself: Kino tells the person and your next calls get
+   *   `room_closed`.
+   * - The code keeps out whoever does not have it (guessing is online only); it does not protect against the tunnel provider
+   *   (Cloudflare) targeting a room. Keep a room's messages low-sensitivity (a chat, playback positions).
+   * - While this device hosts your room, Kino shows it in your tab in Ajustes with a button that closes it.
+   *
+   * Present on every apiVersion 14 runtime: feature-detect with `typeof kino.room === "object"` (the Node kit runs an
+   * in-memory room with two simulated members).
+   */
+  namespace room {
+    function open(options?: KinoRoomOpenOptions): Promise<KinoRoomOpened>;
+    function join(options: KinoRoomJoinOptions): Promise<KinoRoomJoined>;
+    function send(payload: object, options?: KinoRoomSendOptions): Promise<void>;
+    function inbox(options?: KinoRoomInboxOptions): Promise<KinoRoomInbox>;
+    function members(options?: { session?: KinoRoomSession }): Promise<KinoRoomMember[]>;
+    function close(options?: { session?: KinoRoomSession }): Promise<void>;
+    function state(): Promise<KinoRoomState>;
+  }
+
+  /**
+   * apiVersion 14, capability `ai` (Task 8r, declarative, never on its own): one short, one-shot ask to Kino's text AI (Kilo's
+   * free models, the same fixed destination Kino's own assistant uses; no key, no server of yours or Kino's). No conversation
+   * memory, no streaming, no tools, no images, no files; Kino keeps nothing and logs only sizes. The person approves it at install,
+   * and again on the update that adds it, on a RED consent line: "Podrá enviar texto a un servicio de IA de terceros (Kilo) para
+   * que lo resuma o clasifique; lo que envíe sale de tu aparato" / "Can send text to a third-party AI service (Kilo) to have it
+   * summarized or classified; what it sends leaves your device". They can switch it off in your tab in Ajustes: every ask is then
+   * `refused`. Only from the person's own press (a settings `action`, a `panelAction`, a `screenEvent` tap or submit; never a
+   * screen's open, a timer tick, a load-more, a `playerEvent`, Home or search) or from your scheduled `job`, where each ask is one
+   * of the run's requests. At most 10 asks in any 60 s and 100 a day per plugin, one at a time, and 300 a day and 2 at once for
+   * every plugin of the device together (`rate_limited`), 20 s each
+   * (`timeout`). Ask once per screen event and batch items into one prompt: the screen's own 60 s still bounds the event.
+   * `unavailable`: no model could answer now; keep a fallback.
+   *
+   * The reply is UNTRUSTED DATA: the model read whatever you sent (titles from the web, the person's words) and can be steered by
+   * it (prompt injection). Validate every field against what you sent, drop what you did not ask for, never execute it, never
+   * follow instructions found in it, never open a URL from it unchecked. Present on every apiVersion 14 runtime: feature-detect
+   * with `typeof kino.ai === "object"` (the Node kit answers canned text: `KINO_AI_REPLY`, `KINO_AI_ERROR`, `KINO_AI_REVOKED=1`).
+   */
+  namespace ai {
+    function ask(options: KinoAiAskOptions): Promise<KinoAiAnswer>;
+  }
+
+  /**
+   * apiVersion 14, capability "shared" (Task 8q-2; a plain consent line, not red): a small store of your plugin's, per profile,
+   * that syncs between the person's own linked devices, both ways, last writer wins by a clock Kino assigns. Typical use: a `preferPhone`
+   * job on the phone writes its result, the TV's screen reads it. Synchronous, like `kino.storage`; usable from screens, panels,
+   * settings and jobs.
+   *
+   * `get(key)`: the value, or null (never throws: a stored value this engine cannot read answers null). `set(key, value)`: JSON values only (stored as their JSON text): at most 64 KB each, 16 levels
+   * deep, 4 keys and 128 KB per plugin; true when stored, false when it was already that value (nothing written or sent);
+   * `set(key, null)` removes the key. A key's new value reaches the other devices at most once a minute (this device reads it at
+   * once), and at most 4 of your keys travel in any minute. Keys are 1 to 40 of `A-Z a-z 0-9 _ . -`. At most 30 writes a minute.
+   *
+   * NEVER put a secret here (a token, a password, a cookie, a session): it is copied to every linked device. A key with a word
+   * like one (token, secret, password, cookie, session, auth, apiKey..., plurals too; `author` is fine) is refused, and so is a value holding a sealed secret. What `get`
+   * answers is UNTRUSTED: another device wrote it (maybe another version of your plugin): validate its shape, its sizes and every
+   * field before you use it. Errors: `not_allowed`, `bad_request`, `too_large`, `rate_limited`. Feature-detect with
+   * `typeof kino.shared === "object"` (the Node kit simulates two devices: `node sdk/run.mjs <folder> shared`).
+   */
+  namespace shared {
+    function get(key: string): unknown;
+    function set(key: string, value: unknown): boolean;
+  }
+
+  /**
    * Kino 0.9.55: share ONE anonymous, free guest session of your source's portal, so people in regions that can't log in
    * have live sessions to seed from. `session` is a plain object of the session's own fields (its ids and token); Kino keeps
    * only the known seed fields, drops everything else, and sends it to Kino's own error board — but only when the
@@ -1549,6 +2746,20 @@ declare namespace kino {
    */
   namespace sync {
     function remoteChanged(): void;
+  }
+
+  /**
+   * apiVersion 14, additive: what this Kino's screen canvas draws, for feature detection (`typeof kino.screen === "object"`;
+   * `undefined` on an older Kino). `names` lists the `type` names it validates and draws, as these docs spell them
+   * (`Column`, `TextField`, `titleRail`...); a node of any other type is dropped with a log line, so check it before relying
+   * on a widget a newer Kino adds. `widgets` lists the same widgets by their older names. `version` is the screen contract's
+   * own number (1 for now), raised only when a widget or an answer field changes meaning. The Node kit reports the
+   * contract's lists.
+   */
+  namespace screen {
+    const names: readonly string[];
+    const widgets: readonly string[];
+    const version: number;
   }
 
   /**
@@ -1736,15 +2947,18 @@ declare namespace kino {
    * Kino's instruction; a close button beside them. The first code the camera decodes that holds 1 to 4,096 characters
    * answers the call; a longer one is ignored, the scanner says "This code is not valid for <your plugin>" and keeps looking.
    *
-   * Rules: only from a settings `action` or a `panelAction` (the person pressed one of your buttons), never from Home,
-   * search, a play, a list, a title page, your section, `settingsStatus` or any background call; that call's own time limit
-   * stops while the scanner is up. At most one scan on screen at a time, for the whole app. The scanner closes by itself
-   * after 120 s. On a device without a camera, and on Kino's TV interface, it never opens.
+   * Rules: only from a settings `action`, a `panelAction` or a `screenEvent` that follows the person's press (they pressed
+   * one of your buttons), never from Home, search, a play, a list, a title page, your section, `settingsStatus` or any
+   * background call. In a screen (apiVersion 14: a root screen, a screen-mode panel, a contributed tab in screen mode),
+   * only the event of the person's own tap or submit counts: never the open event, a timer tick (`every`), a load-more, a
+   * change, a panel's `refreshMs` or a `playerEvent`. The settings node inside a screen runs its `action` as Ajustes does.
+   * That call's own time limit stops while the scanner is up. At most one scan on screen at a time, for the whole app.
+   * The scanner closes by itself after 120 s. On a device without a camera, and on Kino's TV interface, it never opens.
    *
    * Errors (a KinoError whose `code` says what to do): `"busy"` (a scan is already open, yours or another plugin's: wait
    * for it), `"timeout"` (nothing was scanned in 120 s: offer to try again), `"unavailable"` (this device cannot scan: no
-   * camera, or a TV: show the code another way, such as a settings `qr` setting), `"not_allowed"` (called from anything but
-   * a settings `action` or a `panelAction`: "kino.qr.scan only runs from a settings action or panelAction"; scan from a
+   * camera, or a TV: show the code another way, such as a settings `qr` setting), `"not_allowed"` (called from anything
+   * else: "kino.qr.scan only runs from a settings action, panelAction or screenEvent the person pressed"; scan from a
    * button), `"permission_denied"` (the person did not give Kino the camera: say they can allow it in the phone's
    * settings) and `"invalid_request"` (a `title` or `titleEn` that is not a string, is over 80 characters or holds a
    * control or formatting character: fix the call).

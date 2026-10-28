@@ -69,8 +69,249 @@ export function requiredExports(caps, settings = [], manifest = {}) {
     ...(settings.some((s) => s && (s.type === "status" || s.type === "qr")) ? [ui.status] : []),
     ...(settings.some((s) => s && s.type === "action") ? [ui.action] : []),
   ];
-  return [...new Set([...caps.flatMap((c) => contract.capabilities.exports[c] || (contract.capabilities.declarative.includes(c) ? [] : [c])), ...fromSettings, ...(manifest.section ? [contract.manifest.section.export] : []), ...(manifest.panel ? [contract.manifest.panel.exports.panel] : [])])];
+  return [...new Set([...caps.flatMap((c) => contract.capabilities.exports[c] || (contract.capabilities.declarative.includes(c) ? [] : [c])), ...fromSettings, ...(manifest.section ? [contract.manifest.section.export] : []), ...(manifest.panel ? [contract.manifest.panel.exports.panel] : []), ...((manifest.screen?.replaces || []).includes("categories") ? [contract.output.categories.export] : [])])];
 }
+
+/** PluginManifest.kt's refusals for the `screen` field (apiVersion 14). */
+/** A `go.screen` route (PluginScreenOutput.GO_ROUTE). */
+const GO_ROUTE = /^[A-Za-z0-9._~-]{1,64}$/;
+
+/**
+ * PluginScreenOutput.screenGoOf: a `go.screen`'s value (Task 7g), `{ route?, args? }` and nothing else, or null with [bad] told
+ * why. Shared by screens, the player panel and the `open` of a home/section/browse item or row. `args` is measured as the app
+ * measures it (org.json's text, which escapes "/").
+ */
+export function screenGoOf(v, bad) {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) { bad("is not an object"); return null; }
+  if (Object.keys(v).some((k) => k !== "route" && k !== "args")) { bad("takes only route and args"); return null; }
+  const S = contract.manifest.screen.limits;
+  let route = null;
+  if (v.route !== undefined && v.route !== null) {
+    if (typeof v.route !== "string" || !GO_ROUTE.test(v.route) || v.route.length > S.maxGoRouteChars) { bad(`route must be 1 to ${S.maxGoRouteChars} letters, digits or . _ ~ -`); return null; }
+    route = v.route;
+  }
+  let args = null;
+  if (v.args !== undefined && v.args !== null) {
+    if (typeof v.args !== "object" || Array.isArray(v.args)) { bad("args is not an object"); return null; }
+    if (Buffer.byteLength(JSON.stringify(v.args).replace(/\//g, "\\/"), "utf8") > S.maxGoArgsBytes) { bad(`args is over ${S.maxGoArgsBytes} bytes`); return null; }
+    args = v.args;
+  }
+  return { ...(route !== null ? { route } : {}), ...(args !== null ? { args } : {}) };
+}
+
+/** A value as the app's screen log lines show it (PluginScreenOutput.fmt). */
+function goFmt(v) {
+  if (typeof v === "string") return `"${v.slice(0, 40)}"`;
+  if (v === undefined || v === null) return "null";
+  const t = typeof v === "number" ? (Number.isInteger(v) ? String(v) : javaDouble(v)) : typeof v === "object" ? JSON.stringify(v).replace(/\//g, "\\/") : String(v);
+  return t.slice(0, 40);
+}
+
+/**
+ * PluginScreenOutput.titleByIdsOf (Task 8m): a `go.titleByIds`'s value, only its fields, a kind of movie or series, at least
+ * one of tmdb and imdb, every number a whole number in its range and the title scrubbed; or null with [bad] told the first
+ * reason. A null field is an absent one. Shared by screens and the player panel's answers. Returns only the fields kept.
+ */
+export function titleByIdsOf(v, bad) {
+  const T = contract.manifest.screen.goTitleByIds;
+  if (v === null || typeof v !== "object" || Array.isArray(v)) { bad("is not an object"); return null; }
+  if (Object.keys(v).some((k) => !T.fields.includes(k))) { bad(`takes only ${T.fields.join(", ")}`); return null; }
+  const present = (k) => v[k] !== undefined && v[k] !== null;
+  const kind = present("kind") ? v.kind : null;
+  if (typeof kind !== "string" || !T.kinds.includes(kind)) { bad(`kind ${goFmt(kind)} is not ${T.kinds.join(", ")}`); return null; }
+  const NOT = Symbol("not whole");
+  const whole = (k, lo, hi) => {
+    if (!present(k)) return null;
+    const d = v[k];
+    if (typeof d !== "number" || !Number.isInteger(d) || d < lo || d > hi) { bad(`${k} must be a whole number from ${lo} to ${hi}`); return NOT; }
+    return d;
+  };
+  const tmdb = whole("tmdb", 1, T.maxTmdb);
+  if (tmdb === NOT) return null;
+  let imdb = null;
+  if (present("imdb")) {
+    if (typeof v.imdb !== "string" || !new RegExp(T.imdbPattern).test(v.imdb)) { bad("imdb must be tt and 7 to 10 digits"); return null; }
+    imdb = v.imdb;
+  }
+  if (tmdb === null && imdb === null) { bad("needs tmdb or imdb"); return null; }
+  const season = whole("season", 0, T.maxSeason);
+  if (season === NOT) return null;
+  const episode = whole("episode", 1, T.maxEpisode);
+  if (episode === NOT) return null;
+  if ((season !== null || episode !== null) && kind !== "series") { bad("season and episode are for a series only"); return null; }
+  if (episode !== null && season === null) { bad("episode needs a season"); return null; }
+  const year = whole("year", T.minYear, T.maxYear);
+  if (year === NOT) return null;
+  const badTitle = `title must be text of at most ${T.maxTitleChars} characters`;
+  let title = null;
+  if (present("title")) {
+    if (typeof v.title !== "string") { bad(badTitle); return null; }
+    const t = v.title.replace(new RegExp(T.scrubPattern, "g"), "").trim();
+    if (t.length > T.maxTitleChars) { bad(badTitle); return null; }
+    if (t !== "") title = t;
+  }
+  const out = { kind };
+  if (tmdb !== null) out.tmdb = tmdb;
+  if (imdb !== null) out.imdb = imdb;
+  if (season !== null) out.season = season;
+  if (episode !== null) out.episode = episode;
+  if (title !== null) out.title = title;
+  if (year !== null) out.year = year;
+  return out;
+}
+
+/**
+ * ScreenUrl.read (Task 8s): a `go.url`'s href by the same textual rule as the app, step for step, so both give the same
+ * verdict, reason and normalized address (screen-cases.json pins it). Returns `{ href, host }` or `{ bad }`. The kit never
+ * gates on `new URL()`: the WHATWG parser re-encodes `'` in a query, maps or refuses some punycode labels and resolves dot
+ * segments, so it would disagree with the app. The app also asks java.net.URI, which accepts everything this rule accepts.
+ */
+export function urlHrefOf(raw) {
+  const U = contract.manifest.screen.goUrl;
+  const NOT_HTTPS = "href must be an https address";
+  const NOT_VALID = "href is not a valid address";
+  if (typeof raw !== "string" || raw === "") return { bad: NOT_HTTPS };
+  if (raw.length > U.maxHrefChars) return { bad: `href is longer than ${U.maxHrefChars} characters` };
+  if (!new RegExp(U.hrefChars).test(raw)) return { bad: "href holds a space, a control, direction or non-ASCII character (write the host as punycode, percent-encode the rest)" };
+  if (raw.slice(0, 8).toLowerCase() !== "https://") return { bad: NOT_HTTPS };
+  if (/%(?![0-9A-Fa-f]{2})/.test(raw) || raw.split("#").length > 2) return { bad: NOT_VALID };
+  const rest = raw.slice(8);
+  const cut = rest.search(/[/?#]/);
+  const end = cut < 0 ? rest.length : cut;
+  const authority = rest.slice(0, end);
+  const tail = rest.slice(end);
+  if (authority.includes("@")) return { bad: "href must not carry a user name or password" };
+  const colon = authority.indexOf(":");
+  if (colon >= 0) {
+    const port = authority.slice(colon + 1);
+    if (!/^[0-9]*$/.test(port)) return { bad: NOT_VALID };
+    if (port !== "" && port.replace(/^0+/, "") !== "443") return { bad: "href must not name a port other than 443" };
+  }
+  const host = (colon >= 0 ? authority.slice(0, colon) : authority).toLowerCase();
+  if (!urlPublicName(host)) return { bad: `href host "${host.slice(0, 64)}" is not a public name with a dot (never an IP address, localhost, a local name or a single label)` };
+  const path = tail === "" || tail[0] !== "/" ? `/${tail}` : tail;
+  return { href: `https://${host}${path}`, host };
+}
+
+/** ScreenUrl.publicName: 2+ labels of letters, digits and inner hyphens, the last starting with a letter, never a local name. */
+function urlPublicName(host) {
+  if (host === "" || host.length > 253) return false;
+  const labels = host.split(".");
+  if (labels.length < 2 || !labels.every((l) => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(l)) || !/^[a-z]/.test(labels[labels.length - 1])) return false;
+  return !contract.manifest.screen.goUrl.blockedSuffixes.some((s) => host === s || host.endsWith(`.${s}`));
+}
+
+/**
+ * PluginScreenOutput.copyGoOf (Task 8x): a `go.copy`'s value, only text, label and sensitive; the text scrubbed (newlines kept),
+ * trimmed, 1..goCopy.maxTextChars characters in at most goCopy.maxLines lines; the label scrubbed, trimmed, at most
+ * goCopy.maxLabelChars (blank: none); sensitive true or false. Or null with [bad] told the first reason (never the text).
+ * Returns `{ text, label?, sensitive? }` (`sensitive` only when true).
+ */
+export function copyGoOf(v, bad) {
+  const C = contract.manifest.screen.goCopy;
+  if (v === null || typeof v !== "object" || Array.isArray(v)) { bad("is not an object"); return null; }
+  if (Object.keys(v).some((k) => !C.fields.includes(k))) { bad(`takes only ${C.fields.join(", ")}`); return null; }
+  const badText = `text must be 1 to ${C.maxTextChars} characters`;
+  if (typeof v.text !== "string") { bad(badText); return null; }
+  const text = v.text.replace(new RegExp(C.textScrubPattern, "g"), "").trim();
+  if (text === "" || text.length > C.maxTextChars) { bad(badText); return null; }
+  if (text.split("\n").length > C.maxLines) { bad(`text must be at most ${C.maxLines} lines`); return null; }
+  const badLabel = `label must be text of at most ${C.maxLabelChars} characters`;
+  let label = null;
+  if (v.label !== undefined && v.label !== null) {
+    if (typeof v.label !== "string") { bad(badLabel); return null; }
+    const l = v.label.replace(new RegExp(C.labelScrubPattern, "g"), "").trim();
+    if (l.length > C.maxLabelChars) { bad(badLabel); return null; }
+    if (l !== "") label = l;
+  }
+  let sensitive = false;
+  if (v.sensitive !== undefined && v.sensitive !== null) {
+    if (typeof v.sensitive !== "boolean") { bad("sensitive must be true or false"); return null; }
+    sensitive = v.sensitive;
+  }
+  return { text, ...(label !== null ? { label } : {}), ...(sensitive ? { sensitive: true } : {}) };
+}
+
+/**
+ * PluginScreenOutput.liveChannelGoOf (Task 11): a `go.liveChannel`'s value, exactly `provider` (a plugin id, never a reserved
+ * one) and `code` (an item id: the channel's id in that plugin's listing). Or null with [bad] told the first reason.
+ */
+export function liveChannelGoOf(v, bad) {
+  const L = contract.manifest.screen.goLiveChannel;
+  if (v === null || typeof v !== "object" || Array.isArray(v)) { bad("is not an object"); return null; }
+  if (Object.keys(v).some((k) => !L.fields.includes(k))) { bad(`takes only ${L.fields.join(", ")}`); return null; }
+  if (typeof v.provider !== "string" || !new RegExp(L.providerPattern).test(v.provider) || L.reservedProviders.includes(v.provider)) {
+    bad("provider must be a plugin id"); return null;
+  }
+  if (typeof v.code !== "string" || !new RegExp(L.codePattern).test(v.code)) { bad("code must be a channel id (1 to 128 letters, digits, . _ ~ -)"); return null; }
+  return { provider: v.provider, code: v.code };
+}
+
+/**
+ * ScreenLiveChannel.refusal (Task 11): why a kept `go.liveChannel` from [manifest]'s plugin is not honoured for an event of
+ * [trigger] ("press", "submit", "change", "open", "timer", ...), or null when Kino tunes. Not the person's own press or submit:
+ * "not_press"; a plugin whose approved contributing panel does not declare "live" in kinds: goLiveChannel.needsLiveTabLog.
+ */
+export function liveChannelGoRefusal(manifest, trigger) {
+  const L = contract.manifest.screen.goLiveChannel;
+  const C = contract.manifest.panel.contributes;
+  if (!L.fromTriggers.includes(trigger)) return "not_press";
+  const caps = manifest?.capabilities ?? [];
+  const kinds = Array.isArray(manifest?.panel?.kinds) ? manifest.panel.kinds : C.kinds.default;
+  if (manifest?.panel?.contributes !== true || !caps.includes(C.capability) || !kinds.includes(L.needsKind)) return L.needsLiveTabLog;
+  return null;
+}
+
+/**
+ * ScreenUrl.cleanTitle (Task 8s fix round 1, M3): goUrl.titleScrubPattern's characters removed, runs of combining marks cut to
+ * goUrl.maxCombiningMarks, trimmed.
+ */
+export function urlTitleOf(raw) {
+  const U = contract.manifest.screen.goUrl;
+  return raw.replace(new RegExp(U.titleScrubPattern, "g"), "").replace(new RegExp(`(\\p{Mn}{${U.maxCombiningMarks}})\\p{Mn}+`, "gu"), "$1").trim();
+}
+
+/**
+ * PluginScreenOutput.urlGoOf (Task 8s): a `go.url`'s value, only href and title, the href read by [urlHrefOf], the title
+ * scrubbed and trimmed (at most goUrl.maxTitleChars); or null with [bad] told the first reason. Returns `{ href, title? }`.
+ */
+export function urlGoOf(v, bad) {
+  const U = contract.manifest.screen.goUrl;
+  if (v === null || typeof v !== "object" || Array.isArray(v)) { bad("is not an object"); return null; }
+  if (Object.keys(v).some((k) => !U.fields.includes(k))) { bad(`takes only ${U.fields.join(", ")}`); return null; }
+  const read = urlHrefOf(v.href === undefined ? null : v.href);
+  if (read.bad !== undefined) { bad(read.bad); return null; }
+  const badTitle = `title must be text of at most ${U.maxTitleChars} characters`;
+  let title = null;
+  if (v.title !== undefined && v.title !== null) {
+    if (typeof v.title !== "string") { bad(badTitle); return null; }
+    const t = urlTitleOf(v.title);
+    if (t.length > U.maxTitleChars) { bad(badTitle); return null; }
+    if (t !== "") title = t;
+  }
+  return title === null ? { href: read.href } : { href: read.href, title };
+}
+
+/** PluginManifest.kt's LABEL_SCRUB: what a plugin's button label never keeps (control characters, bidirectional overrides). */
+const LABEL_SCRUB = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+const SCREEN_MESSAGES = {
+  notObject: 'The "screen" field must be an object with a "label"',
+  badIconFile: 'The "screen.iconFile" field must be a relative path to a .png',
+  bothIcons: 'The "screen" field takes an "icon" or an "iconFile", not both',
+  badMenuOpens: 'The "screen.menuOpens" field must be "section", "screen" or "both"',
+  menuNeedsSection: 'The "screen.menuOpens" value "section" or "both" needs the "section" field',
+  badAdult: 'The "screen.adult" field must be true or false',
+  badSettingsIn: 'The "screen.settingsIn" field must be "settings", "screen" or "both"',
+  settingsNeedScreen: 'The "screen.settingsIn" value "screen" needs a screen entry: "screen.menuOpens" "screen" or "both", or "settings" in "screen.opensFrom"',
+  badOpensFrom: 'The "screen.opensFrom" field must be a list of "menu" and "settings"',
+  emptyOpensFrom: 'The "screen.opensFrom" field needs "menu", "settings" or both',
+  badSettingsButton: 'The "screen.settingsButton" field must be an object whose "label" and "labelEn" are 1 to 40 characters',
+  badReplaces: 'The "screen.replaces" field must be a list of "categories"',
+  replacesNeedsCatalog: 'The "screen.replaces" value "categories" needs a catalog: the "browse" capability',
+  needsCapability: 'The "screen" field needs the "screen" capability',
+  capabilityNeedsBlock: 'The "screen" capability needs a "screen" field with a "label"',
+};
 
 /** Same checks, same order, same English messages as the app's own manifest validation. Returns { ok, field?, message?, manifest? }. */
 const EXTERNAL_RESOLVER_BAD =
@@ -113,20 +354,137 @@ export function externalResolverOk(r) {
 
 /**
  * ManifestParser.isStandaloneSet: at least one standalone capability and nothing else but standaloneSupplements (socket,
- * storageLarge, catalog, qrScan). Such a plugin plays nothing and needs neither `required` nor `atLeastOneOf`.
+ * storageLarge, catalog, qrScan, room, schedule, ai, shared, and playerControl beside a panel). Such a plugin plays nothing and needs neither `required` nor `atLeastOneOf`.
  */
 export function isStandaloneSet(caps) {
   const { standalone, standaloneSupplements = [] } = contract.capabilities;
   return caps.some((c) => standalone.includes(c)) && caps.every((c) => standalone.includes(c) || standaloneSupplements.includes(c));
 }
 
-export function validateManifest(text, { knownPermissions = contract.permissions } = {}) {
-  const m = contract.manifest;
+/**
+ * The app's ManifestParser.parse: the manifest validated, then each `enhancements` block this Kino knows (key <= maxApiVersion)
+ * merged over it in numeric order through the same checks, at the key's apiVersion (contract.manifest.enhancements, Task 8c).
+ * A block that fails is dropped (manifest.enhancementsDropped, as the app logs it): an enhancement never refuses the plugin.
+ * [exports] (the script's, when known: the app's probe or record) also drops a block whose new exports the script lacks.
+ * manifest.capabilities / screen / settings are the merged ones; manifest.enhancementsApplied lists the keys merged.
+ */
+export function validateManifest(text, { knownPermissions = contract.permissions, exports = null } = {}) {
+  const base = validateManifestWithoutEnhancements(text, { knownPermissions });
+  if (!base.ok) return base;
+  return withEnhancements(JSON.parse(text), base.manifest, { knownPermissions }, exports);
+}
+
+/** ManifestParser.allRequiredExports: everything the entry must export for [m]. */
+function allRequiredExports(m) {
+  return new Set(requiredExports(m.capabilities, m.settings || [], m));
+}
+
+/** ManifestParser.shownKey: at most 40 characters, control and bidirectional characters replaced by "?". */
+const shownKey = (k) => k.slice(0, 40).replace(LABEL_SCRUB, "?");
+
+/** The apiVersion whose features the manifest uses: its own, or the newest enhancement merged (PluginManifest.featureApiVersion). */
+export function featureApiVersion(manifest) {
+  return Math.max(manifest.apiVersion, ...(manifest.enhancementsApplied || []));
+}
+
+/** The manifest as a Kino before `enhancements` reads it: that key is never looked at (ManifestParser.parseWithoutEnhancements). */
+export function validateManifestWithoutEnhancements(text, { knownPermissions = contract.permissions } = {}) {
   const bad = (field, message) => ({ ok: false, field, message });
-  if (Buffer.byteLength(text, "utf8") > m.maxBytes) return bad("kino-plugin.json", "The manifest is over 16 KB");
+  if (Buffer.byteLength(text, "utf8") > contract.manifest.maxBytes) return bad("kino-plugin.json", "The manifest is over 16 KB");
   let o;
   try { o = JSON.parse(text); } catch { return bad("kino-plugin.json", "The manifest is not valid JSON"); }
   if (o === null || typeof o !== "object" || Array.isArray(o)) return bad("kino-plugin.json", "The manifest is not valid JSON");
+  return validateManifestObject(o, { knownPermissions });
+}
+
+const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+
+/** ManifestParser.withEnhancements: [base] with each block of o.enhancements this Kino knows merged in. */
+function withEnhancements(o, base, opts, exports) {
+  const E = contract.manifest.enhancements;
+  if (!has(o, "enhancements")) return { ok: true, manifest: { ...base, enhancementsApplied: [], enhancementsDropped: [] } };
+  const blocks = o.enhancements;
+  if (blocks === null || typeof blocks !== "object" || Array.isArray(blocks)) {
+    return { ok: true, manifest: { ...base, enhancementsApplied: [], enhancementsDropped: [E.dropped.notObject] } };
+  }
+  const dropped = [];
+  const numbered = [];
+  // Sorted by UTF-16 code units, as the app sorts them: the log reads the same in both.
+  for (const k of Object.keys(blocks).sort()) {
+    if (!re(E.keyPattern).test(k)) dropped.push(`enhancements.${shownKey(k)}: ${E.dropped.badKey}`);
+    else numbered.push([Number(k), blocks[k]]);
+  }
+  numbered.sort((a, b) => a[0] - b[0]);
+  let merged = { ...o };
+  delete merged.enhancements;
+  let current = { ...base, enhancementsApplied: [] };
+  for (const [key, block] of numbered) {
+    // Dropped, never refused: an older Kino installed the plugin, and the app's store re-reads it after a Kino update.
+    if (key <= base.apiVersion) { dropped.push(`enhancements.${key}: ${E.dropped.notAboveApi.replace("{api}", String(base.apiVersion))}`); continue; }
+    // A key above this Kino's maxApiVersion belongs to a newer Kino: ignored without a word.
+    if (key > contract.maxApiVersion) continue;
+    const step = enhance(merged, key, block, current, opts, exports);
+    if (typeof step === "string") dropped.push(`enhancements.${key}: ${step}`);
+    else { merged = step.json; current = step.manifest; }
+  }
+  return { ok: true, manifest: { ...current, enhancementsDropped: dropped } };
+}
+
+/** ManifestParser.enhance: the block of [key] merged over [json] and validated at apiVersion [key], or why not (a string). */
+function enhance(json, key, block, current, opts, exports) {
+  const E = contract.manifest.enhancements;
+  if (block === null || typeof block !== "object" || Array.isArray(block)) return E.dropped.blockNotObject;
+  const extra = Object.keys(block).filter((k) => !E.fields.includes(k)).sort()[0];
+  if (extra !== undefined) return E.dropped.badField.replace("{field}", shownKey(extra));
+  const candidate = { ...json };
+  if (has(block, "capabilities")) {
+    const added = block.capabilities;
+    if (!Array.isArray(added) || added.some((c) => typeof c !== "string")) return E.dropped.capabilitiesNotList;
+    const no = added.find((c) => !E.capabilities.includes(c));
+    if (no !== undefined) return E.dropped.badCapability.replace("{capability}", shownKey(no));
+    const caps = Array.isArray(candidate.capabilities) ? [...candidate.capabilities] : [];
+    for (const c of added) if (!caps.includes(c)) caps.push(c);
+    candidate.capabilities = caps;
+  }
+  if (has(block, "screen")) candidate.screen = block.screen;
+  if (has(block, "settings")) candidate.settings = block.settings;
+  if (has(block, "panel")) candidate.panel = block.panel;
+  candidate.apiVersion = key;
+  const r = validateManifestObject(candidate, opts);
+  if (!r.ok) return `${r.field}: ${r.message}`;
+  // Only the enhanced fields come from the check at [key]: a field the plugin's apiVersion ignores must not start to count.
+  if ((r.manifest.section === null) !== (current.section === null)) return E.dropped.sectionChanges.replace("{key}", String(key));
+  // A setting the manifest (or an earlier block) declares keeps its type: another device on an older Kino stores it as that.
+  if (has(block, "settings")) {
+    const retyped = r.manifest.settings.find((s) => current.settings.some((b) => b.key === s.key && b.type !== s.type));
+    if (retyped) return E.dropped.settingRetyped.replace("{key}", retyped.key);
+  }
+  // Categorías for this plugin follow its OWN apiVersion: a screen cannot replace what is never there.
+  const categoriesApi = contract.output.categories.apiVersion;
+  if ((r.manifest.screen?.replaces || []).includes("categories") && current.apiVersion < categoriesApi) {
+    return E.dropped.replacesNeedsCategories.replace("{min}", String(categoriesApi));
+  }
+  const next = {
+    ...current, capabilities: r.manifest.capabilities, screen: r.manifest.screen,
+    settings: has(block, "settings") ? r.manifest.settings : current.settings,
+    panel: has(block, "panel") ? r.manifest.panel : current.panel,
+    enhancementsApplied: [...current.enhancementsApplied, key],
+  };
+  // Task 8k: the capability and the contributing panel come together (the check at [key] saw the merged JSON, which may hold a
+  // `panel` the plugin's own apiVersion ignores).
+  if (next.capabilities.includes(contract.manifest.panel.contributes.capability) !== (next.panel?.contributes === true)) return E.dropped.panelTabNeedsPanel;
+  if (exports) {
+    const before = allRequiredExports(current);
+    const have = new Set(exports);
+    const missing = [...allRequiredExports(next)].filter((e) => !before.has(e) && !have.has(e)).sort();
+    if (missing.length) return E.dropped.missingExports.replace("{exports}", missing.join(", "));
+  }
+  return { json: candidate, manifest: next };
+}
+
+function validateManifestObject(o, { knownPermissions = contract.permissions } = {}) {
+  const m = contract.manifest;
+  const bad = (field, message) => ({ ok: false, field, message });
   const id = typeof o.id === "string" ? o.id : "";
   if (!re(m.idPattern).test(id)) return bad("id", 'The "id" field must be 2 to 40 lowercase letters, digits or hyphens');
   if (m.reservedIds.includes(id)) return bad("id", `The id "${id}" is reserved by Kino`);
@@ -196,6 +554,10 @@ export function validateManifest(text, { knownPermissions = contract.permissions
     // Capabilities that play nothing, declared without any other (a subtitle provider, a tracker, or both), maybe with the
     // runtime room they use (apiVersion 13 standaloneSupplements): neither `required` nor `atLeastOneOf` applies.
     const standalone = isStandaloneSet(caps);
+    // Task 8t (ManifestParser): a standalone set may hold playerControl only beside a panel object.
+    if (standalone && caps.includes("playerControl") && !(o.apiVersion >= m.panel.apiVersion && o.panel !== null && typeof o.panel === "object" && !Array.isArray(o.panel))) {
+      return bad("capabilities", contract.capabilities.playerControlNeedsPanelMessage);
+    }
     const missingRequiredCap = contract.capabilities.required.find((c) => !caps.includes(c));
     if (!standalone && missingRequiredCap !== undefined) return bad("capabilities", `The plugin must declare "${missingRequiredCap}"`);
     if (!standalone && !contract.capabilities.atLeastOneOf.some((c) => caps.includes(c))) {
@@ -274,7 +636,16 @@ export function validateManifest(text, { knownPermissions = contract.permissions
   if (o.panel !== undefined && o.apiVersion >= m.panel.apiVersion) {
     const max = m.panel.labelMaxChars;
     if (o.panel === null || typeof o.panel !== "object" || Array.isArray(o.panel)) return bad("panel", 'The "panel" field must be an object with a "label"');
-    const label = typeof o.panel.label === "string" ? o.panel.label.trim() : "";
+    // apiVersion 14 (Task 8k): `contributes`, a tab in the player panel of any content. Below it the key is unknown.
+    const C = m.panel.contributes;
+    let contributes = false;
+    if (o.apiVersion >= C.apiVersion && o.panel.contributes !== undefined && o.panel.contributes !== null) {
+      if (typeof o.panel.contributes !== "boolean") return bad("panel", C.badMessage);
+      contributes = o.panel.contributes;
+    }
+    // A contributing panel may leave its label out: the plugin's name stands in (cut to the label's limit).
+    let label = typeof o.panel.label === "string" ? o.panel.label.trim() : "";
+    if (!label && contributes && !has(o.panel, "label")) label = name.slice(0, max).trim();
     if (!label || label.length > max) return bad("panel", `The "panel.label" field must be 1 to ${max} characters`);
     const labelEn = englishVariant(o.panel, "label", 1, max);
     if (labelEn === null) return bad("panel", `The "panel.labelEn" field must be 1 to ${max} characters`);
@@ -284,7 +655,105 @@ export function validateManifest(text, { knownPermissions = contract.permissions
     const iconFile = typeof rawFile === "string" && rawFile.replace(/^\.\//, "") ? rawFile.replace(/^\.\//, "") : null;
     if (icon !== null && iconFile !== null) return bad("panel", 'The "panel" field takes "icon" or "iconFile", not both');
     if (iconFile !== null && (!isSafeRelativePath(iconFile) || !iconFile.endsWith(".png"))) return bad("panel", 'The "panel.iconFile" field must be a relative path to a .png');
-    panel = { label, ...(labelEn ? { labelEn } : {}), ...(icon !== null ? { icon } : {}), ...(iconFile !== null ? { iconFile } : {}) };
+    // Task 11 (apiVersion 14): which content a contributed tab joins, "title" and/or "live"; default ["title"].
+    const K = C.kinds;
+    let kinds = null;
+    if (o.apiVersion >= C.apiVersion && o.panel.kinds !== undefined && o.panel.kinds !== null) {
+      if (!contributes) return bad("panel", K.needsContributesMessage);
+      const raw = o.panel.kinds;
+      if (!Array.isArray(raw) || raw.length === 0 || raw.some((k) => !K.values.includes(k))) return bad("panel", K.badMessage);
+      kinds = K.values.filter((k) => raw.includes(k));
+    }
+    panel = {
+      label, ...(labelEn ? { labelEn } : {}), ...(icon !== null ? { icon } : {}), ...(iconFile !== null ? { iconFile } : {}), ...(contributes ? { contributes: true } : {}),
+      ...(contributes ? { kinds: kinds ?? [...K.default] } : {}),
+    };
+  }
+  // Task 8k: the capability and `panel.contributes` need each other (the capability is what the person approves).
+  if (panel?.contributes === true && !caps.includes(m.panel.contributes.capability)) return bad("panel", m.panel.contributes.needsCapabilityMessage);
+  if (caps.includes(m.panel.contributes.capability) && panel?.contributes !== true) return bad("capabilities", m.panel.contributes.capabilityNeedsMessage);
+  // apiVersion 14: the screen canvas's menu entry (PluginManifest.kt). The block and the capability need each other; below 14
+  // both are unknown. `icon` (a predefined name, any string: validate.mjs warns) or `iconFile` (a .png in the repo), not both.
+  let screen = null;
+  if (o.apiVersion >= m.screen.apiVersion) {
+    if (!caps.includes("screen")) {
+      if (o.screen !== undefined) return bad("screen", SCREEN_MESSAGES.needsCapability);
+    } else {
+      if (o.screen === undefined) return bad("screen", SCREEN_MESSAGES.capabilityNeedsBlock);
+      const sc = o.screen;
+      if (sc === null || typeof sc !== "object" || Array.isArray(sc)) return bad("screen", SCREEN_MESSAGES.notObject);
+      const max = m.screen.labelMaxChars;
+      const label = typeof sc.label === "string" ? sc.label.trim() : "";
+      if (!label || label.length > max) return bad("screen", `The "screen.label" field must be 1 to ${max} characters`);
+      const labelEn = englishVariant(sc, "label", 1, max);
+      if (labelEn === null) return bad("screen", `The "screen.labelEn" field must be 1 to ${max} characters`);
+      // Where the screen opens from (Task 7g): without the menu, the icon and menuOpens are ignored (no entry draws them).
+      let opensFrom = ["menu"];
+      if (sc.opensFrom !== undefined && sc.opensFrom !== null) {
+        if (!Array.isArray(sc.opensFrom)) return bad("screen", SCREEN_MESSAGES.badOpensFrom);
+        const out = [];
+        for (const v of sc.opensFrom) {
+          if (typeof v !== "string" || !m.screen.opensFrom.includes(v)) return bad("screen", SCREEN_MESSAGES.badOpensFrom);
+          if (!out.includes(v)) out.push(v);
+        }
+        if (out.length === 0) return bad("screen", SCREEN_MESSAGES.emptyOpensFrom);
+        opensFrom = out;
+      }
+      const inMenu = opensFrom.includes("menu");
+      let settingsButton = null;
+      if (sc.settingsButton !== undefined && sc.settingsButton !== null) {
+        const b = sc.settingsButton;
+        if (typeof b !== "object" || Array.isArray(b)) return bad("screen", SCREEN_MESSAGES.badSettingsButton);
+        const label = (key) => {
+          const v = b[key];
+          if (v === undefined || v === null) return "";
+          if (typeof v !== "string") return null;
+          const t = v.replace(LABEL_SCRUB, "").trim();
+          return t !== "" && t.length <= m.screen.settingsButtonLabelMaxChars ? t : null;
+        };
+        const es = label("label");
+        const en = label("labelEn");
+        if (es === null || en === null) return bad("screen", SCREEN_MESSAGES.badSettingsButton);
+        if (es !== "" || en !== "") settingsButton = { label: es, labelEn: en };
+      }
+      const icon = typeof sc.icon === "string" && sc.icon.trim() ? sc.icon.trim() : null;
+      const rawFile = sc.iconFile;
+      if (rawFile !== undefined && rawFile !== null && typeof rawFile !== "string") return bad("screen", SCREEN_MESSAGES.badIconFile);
+      const iconFile = typeof rawFile === "string" && rawFile.replace(/^\.\//, "") ? rawFile.replace(/^\.\//, "") : null;
+      if (icon !== null && iconFile !== null) return bad("screen", SCREEN_MESSAGES.bothIcons);
+      if (iconFile !== null && (!isSafeRelativePath(iconFile) || !iconFile.endsWith(".png"))) return bad("screen", SCREEN_MESSAGES.badIconFile);
+      let menuOpens;
+      // No menu entry for the screen: a section keeps its own entry, exactly as before screens existed.
+      if (!inMenu) menuOpens = section ? "section" : "screen";
+      else if (sc.menuOpens === undefined || sc.menuOpens === null) menuOpens = section ? "section" : "screen";
+      else if (typeof sc.menuOpens === "string" && m.screen.menuOpens.includes(sc.menuOpens)) menuOpens = sc.menuOpens;
+      else return bad("screen", SCREEN_MESSAGES.badMenuOpens);
+      if (inMenu && menuOpens !== "screen" && !section) return bad("screen", SCREEN_MESSAGES.menuNeedsSection);
+      if (sc.adult !== undefined && sc.adult !== null && typeof sc.adult !== "boolean") return bad("screen", SCREEN_MESSAGES.badAdult);
+      let settingsIn = "both";
+      if (sc.settingsIn !== undefined && sc.settingsIn !== null) {
+        if (typeof sc.settingsIn !== "string" || !m.screen.settingsIn.includes(sc.settingsIn)) return bad("screen", SCREEN_MESSAGES.badSettingsIn);
+        settingsIn = sc.settingsIn;
+      }
+      // Settings only in the screen need a screen the person can open: an entry of its own.
+      const hasEntry = (inMenu && menuOpens !== "section") || opensFrom.includes("settings");
+      if (settingsIn === "screen" && !hasEntry) return bad("screen", SCREEN_MESSAGES.settingsNeedScreen);
+      // What the screen takes the place of (Task 8): Kino's own Categorías needs the catalog it falls back on.
+      const replaces = [];
+      if (sc.replaces !== undefined && sc.replaces !== null) {
+        if (!Array.isArray(sc.replaces)) return bad("screen", SCREEN_MESSAGES.badReplaces);
+        for (const v of sc.replaces) {
+          if (typeof v !== "string" || !m.screen.replaces.includes(v)) return bad("screen", SCREEN_MESSAGES.badReplaces);
+          if (!replaces.includes(v)) replaces.push(v);
+        }
+      }
+      if (replaces.includes("categories") && !caps.includes("browse")) return bad("screen", SCREEN_MESSAGES.replacesNeedsCatalog);
+      screen = {
+        label, ...(labelEn ? { labelEn } : {}), ...(icon !== null && inMenu ? { icon } : {}), ...(iconFile !== null && inMenu ? { iconFile } : {}), menuOpens, adult: sc.adult === true, settingsIn,
+        ...(sc.every !== undefined && sc.every !== null ? { every: sc.every } : {}), opensFrom, ...(settingsButton !== null ? { settingsButton } : {}),
+        ...(replaces.length > 0 ? { replaces } : {}),
+      };
+    }
   }
   // apiVersion 9: where the settings go (rows, columns, cards). A list here; validate.mjs and panel.mjs judge the rest.
   if (o.settingsLayout !== undefined && o.apiVersion >= m.settingsLayout.apiVersion && !Array.isArray(o.settingsLayout)) return bad("settingsLayout", 'The "settingsLayout" field must be a list');
@@ -361,6 +830,13 @@ export function validateManifest(text, { knownPermissions = contract.permissions
     const syncError = syncFieldError(o, caps, o.settings || []);
     if (syncError) return bad("sync", syncError);
   }
+  // apiVersion 14, `jobs` (Task 8q, PluginJobs.parse): the background jobs of the `schedule` capability; each needs the other.
+  let jobs = [];
+  if (o.apiVersion >= contract.kinoJobs.apiVersion) {
+    const parsedJobs = parseJobs(o.jobs, caps);
+    if (parsedJobs.message) return bad(caps.includes(contract.kinoJobs.capability) && !has(o, "jobs") ? "capabilities" : "jobs", parsedJobs.message);
+    jobs = parsedJobs.jobs;
+  }
   // Judged on what the app honours: below its apiVersion a field is ignored, so it forbids nothing there.
   if (catalogOnly) {
     const playback = { streamHosts: streamHostsAny, browser: browser && !browserPages };
@@ -369,10 +845,61 @@ export function validateManifest(text, { knownPermissions = contract.permissions
   }
   // Below apiVersion 9 the English keys are unknown: dropped here, so nothing downstream (the form, englishCoverage) sees them.
   const settingsOut = o.apiVersion >= contract.settings.english.apiVersion ? o.settings || [] : withoutEnglish(o.settings || []);
-  const out = { ...o, hosts: [...new Set(hosts)], capabilities: caps, permissions: o.permissions || [], settings: settingsOut, insecureHosts, liveStreamHostsAny, streamHostsAny, fetchHostsAny, discoverable, categories, debug, telemetry, browser, browserPages, section, panel, theme, secrets, secretKeyEncodings, catalogOnly };
+  const out = { ...o, hosts: [...new Set(hosts)], capabilities: caps, permissions: o.permissions || [], settings: settingsOut, insecureHosts, liveStreamHostsAny, streamHostsAny, fetchHostsAny, discoverable, categories, debug, telemetry, browser, browserPages, section, panel, screen, theme, secrets, secretKeyEncodings, catalogOnly };
+  // Task 8q: the parsed jobs (labels scrubbed, options sorted); none below apiVersion 14 or without `schedule`.
+  if (o.apiVersion >= contract.kinoJobs.apiVersion) out.jobs = jobs; else delete out.jobs;
   // `signature` only where the app reads it (apiVersion 5+): an ignored one is dropped, as the app drops it.
   if (!signed) delete out.signature;
   return { ok: true, manifest: out };
+}
+
+/** What a job label never keeps (PluginJobs.LABEL_SCRUB): control characters, zero-width and bidirectional marks. */
+const JOB_LABEL_SCRUB = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
+
+/**
+ * The manifest's `jobs` as the app's PluginJobs.parse reads it: `{ jobs }` (each `{ id, label, labelEn, everyMin, everyOptions }`,
+ * labels scrubbed, options sorted, runOn "any" or "preferPhone") or `{ message }` (contract.kinoJobs.manifest). Other keys of a job
+ * are ignored. Shared cases: test/job-cases.json (run by the app too).
+ */
+export function parseJobs(raw, caps) {
+  const J = contract.kinoJobs;
+  const M = J.manifest;
+  const declared = caps.includes(J.capability);
+  if (raw === undefined || raw === null) return declared ? { message: M.scheduleNeedsJobs } : { jobs: [] };
+  if (!declared) return { message: M.jobsNeedsCapability };
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > M.maxJobs) return { message: M.jobsBad };
+  const idPattern = new RegExp(M.idPattern);
+  const label = (v) => {
+    if (v === undefined || v === null) return "";
+    if (typeof v !== "string") return null;
+    const s = v.replace(JOB_LABEL_SCRUB, "").trim();
+    return s.length > 0 && s.length <= M.labelMaxChars ? s : null;
+  };
+  const minutes = (v) => (typeof v === "number" && Number.isInteger(v) && v >= M.minEveryMin && v <= M.maxEveryMin ? v : null);
+  const out = [];
+  for (const j of raw) {
+    if (j === null || typeof j !== "object" || Array.isArray(j)) return { message: M.jobsBad };
+    if (typeof j.id !== "string" || !idPattern.test(j.id)) return { message: M.badId };
+    if (out.some((x) => x.id === j.id)) return { message: M.duplicateId };
+    if (j.label === null || typeof j.label !== "object" || Array.isArray(j.label)) return { message: M.badLabel };
+    const es = label(j.label.es);
+    const en = label(j.label.en);
+    if (!es || en === null) return { message: M.badLabel };
+    if (!Array.isArray(j.everyOptions) || j.everyOptions.length < 1 || j.everyOptions.length > M.maxOptions) return { message: M.badOptions };
+    const options = [];
+    for (const v of j.everyOptions) {
+      const n = minutes(v);
+      if (n === null || options.includes(n)) return { message: M.badOptions };
+      options.push(n);
+    }
+    const every = minutes(j.everyMin);
+    if (every === null || !options.includes(every)) return { message: M.badEvery };
+    // Task 8q-2: runOn, the default when absent or null.
+    const runOn = j.runOn === undefined || j.runOn === null ? M.runOnDefault : j.runOn;
+    if (!M.runOnValues.includes(runOn)) return { message: M.badRunOn };
+    out.push({ id: j.id, label: es, labelEn: en, everyMin: every, everyOptions: options.sort((a, b) => a - b), runOn });
+  }
+  return { jobs: out };
 }
 
 /**
@@ -631,6 +1158,12 @@ function validateSettings(list, apiVersion = contract.maxApiVersion) {
       if (!s.sync.types.includes(o.type)) return s.sync.onlyPasswordOrTextMessage.replace("{key}", key);
       if (typeof o.sync !== "boolean") return s.sync.notBooleanMessage.replace("{key}", key);
     }
+    // apiVersion 14 `unlockWith` (PluginSettings): a toggle or a select may ask Kino's 18+ code before it moves away from its
+    // default; only one of the known values; ignored below it.
+    if (apiVersion >= s.unlockWith.apiVersion && o.unlockWith !== undefined && o.unlockWith !== null) {
+      if (!s.unlockWith.types.includes(o.type)) return s.unlockWith.onlyToggleOrSelectMessage.replace("{key}", key);
+      if (!s.unlockWith.values.includes(o.unlockWith)) return s.unlockWith.badValueMessage.replace("{key}", key).replace("{values}", s.unlockWith.values.join(", "));
+    }
   }
   if (list.filter((o) => o.type === "link").length > s.configAids.maxLinks) return `The plugin has more than ${s.configAids.maxLinks} settings of type link`;
   if (list.filter((o) => o.type === "help").length > s.configAids.maxHelps) return `The plugin has more than ${s.configAids.maxHelps} settings of type help`;
@@ -866,16 +1399,34 @@ function strings(v, max, maxChars) {
   return out;
 }
 
+/** org.json's optString: a string as it is, a number or boolean as Java prints it, an object or array as JSON, else "". */
+function optString(v) {
+  if (typeof v === "string") return v;
+  if (typeof v === "number") return Number.isInteger(v) ? String(v) : javaDouble(v);
+  if (typeof v === "boolean") return String(v);
+  if (v !== null && typeof v === "object") return JSON.stringify(v);
+  return "";
+}
+
 function items(list, max, ctx, drop) {
   const { allowSeries, allowLive, allowAudio, allowAdult } = ctx;
   const out = [];
   const seen = new Set();
-  (Array.isArray(list) ? list : []).forEach((x, i) => {
-    if (out.length >= max) { drop(`items beyond ${max} dropped`); return; }
-    if (x === null || typeof x !== "object") return;
-    const id = typeof x.id === "string" ? x.id : "";
+  const list2 = Array.isArray(list) ? list : [];
+  for (let i = 0; i < list2.length; i++) {
+    // The app's loop: one line at the cap, then it stops.
+    if (out.length >= max) { drop(`items beyond ${max} dropped`); break; }
+    one(list2[i], i);
+  }
+  return out;
+
+  function one(x, i) {
+    // org.json's optJSONObject: an array (or anything not an object) is skipped silently.
+    if (x === null || typeof x !== "object" || Array.isArray(x)) return;
+    const id = optString(x.id);
     if (!re(o().itemIdPattern).test(id)) return drop(`item #${i}: invalid id`);
-    if (typeof x.ref !== "string" || !x.ref || x.ref.length > o().maxRefChars) return drop(`item ${id}: invalid ref`);
+    const ref = optString(x.ref);
+    if (!ref || ref.length > o().maxRefChars) return drop(`item ${id}: invalid ref`);
     const title = text(x.title, o().maxTitleChars);
     if (!title) return drop(`item ${id}: no title`);
     if (!o().itemKinds.includes(x.kind)) return drop(`item ${id}: invalid kind '${String(x.kind).slice(0, 20)}'`);
@@ -893,7 +1444,7 @@ function items(list, max, ctx, drop) {
     seen.add(id);
     const ids = x.ids && typeof x.ids === "object" ? x.ids : {};
     out.push({
-      id, ref: x.ref, title, kind: x.kind, year: text(x.year, 10),
+      id, ref, title, kind: x.kind, year: text(x.year, 10),
       poster: imageOrRef(x.poster, ctx), backdrop: imageOrRef(x.backdrop, ctx),
       overview: text(x.overview, o().maxTextChars), lang: text(x.lang, 20), quality: text(x.quality, 20),
       originalTitle: text(x.originalTitle, o().maxTitleChars),
@@ -907,9 +1458,34 @@ function items(list, max, ctx, drop) {
       ...(adult ? { adult: true } : {}),
       // Only an audio item has one (and audio items only exist from apiVersion 8, dropped above below it).
       ...(o().audioKinds.includes(x.kind) && text(x.artist, o().maxArtistChars) ? { artist: text(x.artist, o().maxArtistChars) } : {}),
+      ...openField(x.open, `item ${id}`, drop),
     });
-  });
-  return out;
+  }
+}
+
+/**
+ * The app's PluginOutput.screenItems: the items of a plugin screen's title components (apiVersion 14 allows every item
+ * kind and `adult`), read by the same item parser as `home` rows, with its drop lines; at most [max].
+ */
+export function screenItems(list, max, drop, allowSeries = true) {
+  // A screen's images are https only (spec Safety): a cleartext poster or backdrop is blanked, Kino's placeholder shows.
+  const https = (u) => (u.startsWith("https://") ? u : "");
+  return items(list, max, { allowSeries, allowLive: true, allowAudio: true, allowAdult: true, servers: [] }, drop)
+    .map((x) => ({ ...x, poster: https(x.poster), backdrop: https(x.backdrop) }));
+}
+
+/**
+ * PluginOutput.openOf (Task 7g): an item's or a row's `open` is only `{ screen: { route?, args? } }` (read as a screen's
+ * go.screen); anything else is ignored, the item or row kept. `{ open }` to spread, or nothing.
+ */
+function openField(raw, where, drop) {
+  if (raw === undefined || raw === null) return {};
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw) || Object.keys(raw).length !== 1 || !("screen" in raw)) {
+    drop(`${where}: open must be {screen: {route, args}}, ignored`);
+    return {};
+  }
+  const g = screenGoOf(raw.screen, (why) => drop(`${where}: open.screen ${why}, ignored`));
+  return g === null ? {} : { open: { screen: g } };
 }
 
 function page(value, max, ctx, drop) {
@@ -950,7 +1526,7 @@ function rows(value, ctx, drop) {
     let ref = typeof r.ref === "string" && r.ref ? r.ref : null;
     if (ref && !ctx.allowNext) { drop(`home: row ${id} has a ref but the plugin doesn't declare browse`); ref = null; }
     if (ref && ref.length > o().maxRefChars) { drop(`home: row ${id} ref too long`); ref = null; }
-    out.push({ id, title, ref, items: list, genre: genreOf(r.genre) });
+    out.push({ id, title, ref, items: list, genre: genreOf(r.genre), ...openField(r.open, `home: row ${id}`, drop) });
   });
   return out;
 }
@@ -2166,6 +2742,17 @@ export function settableTypes(apiVersion) {
 }
 
 /**
+ * SettingLocks.refusesPluginWrite: whether a plugin's own write of [wanted] to setting [s] (its manifest entry) is refused by its
+ * `unlockWith`: anything but its default (a toggle without one starts off, a select at its first option).
+ */
+export function lockRefuses(s, wanted) {
+  if (!s || s.unlockWith === undefined || s.unlockWith === null) return false;
+  const def = s.default !== undefined && s.default !== null ? s.default
+    : s.type === "toggle" ? false : s.type === "select" && Array.isArray(s.options) && s.options[0] ? s.options[0].value : null;
+  return wanted !== def;
+}
+
+/**
  * An action answer's `setSettings` (additive action.setSettings), as PluginSettingsUi.setValues: the kept values, or null when
  * Kino refuses the whole field (one drop line). Only the plugin's own text/select settings and, from apiVersion 13, its
  * passwords (never a url); a value the scrub would change holds a secret and is refused.
@@ -2183,7 +2770,8 @@ function setSettingsOf(raw, settings, cleared, scrub, drop, apiVersion) {
     const s = settings.find((x) => x.key === k && types.includes(x.type));
     const v = typeof raw[k] === "string" ? raw[k].trim() : null;
     const type = s && contract.settings.types[s.type];
-    const fits = s && v !== null && !cleared.includes(k) && !(s.required === true && !v) &&
+    // A locked select (unlockWith) moves away from its default only by the person, after the code (SettingLocks).
+    const fits = s && v !== null && !cleared.includes(k) && !(s.required === true && !v) && !lockRefuses(s, v) &&
       (s.type === "select" ? (s.options || []).some((o) => o.value === v)
         : v.length <= type.maxChars && (s.type !== "url" || !v || isUserServer(v))) &&
       scrub(v) === v;

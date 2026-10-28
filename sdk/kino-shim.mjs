@@ -13,15 +13,17 @@
 // from `.kino-secrets.json` next to the manifest (`{ "<name>": "<value>" }`, written by hand during
 // development; `seal.mjs` only ever produces the sealed string that goes in the manifest) and
 // simulates the app's marker, substitution, declared-host-and-https and redaction rules on top of that.
-import { kitCall } from "./kit-call.mjs";
+import { aiOriginAllowed, currentQrOrigin, kitCall, kitJobRequest, qrScanOriginAllowed } from "./kit-call.mjs";
 import { gunzipSync } from "node:zlib";
 import { createCipheriv, createDecipheriv, createHash, createHmac, createPublicKey, diffieHellman, generateKeyPairSync, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual, sign as nodeSign, verify as nodeVerify } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { allowsByteSource, allowsImageRefs, anyFetchRefusal, BYTE_STREAM_INVALID, byteSourceOf, readAnswer, readRangeProblem, anyHostBudget, contract, fetchAnyHost, hostMatches, imageAnswer, imageRefOf, isUserServer, kb, schemeAllowed, syncCallCap } from "./contract.mjs";
+import { allowsByteSource, allowsImageRefs, anyFetchRefusal, BYTE_STREAM_INVALID, byteSourceOf, readAnswer, readRangeProblem, anyHostBudget, contract, featureApiVersion, fetchAnyHost, hostMatches, imageAnswer, imageRefOf, isUserServer, kb, schemeAllowed, syncCallCap } from "./contract.mjs";
 import { decodeCipherKey } from "./seal.mjs";
+import { keepsAddresses } from "./screen.mjs";
 import { filterRelevant, shortQuery, sortBySimilarity } from "./kino-rank.mjs";
+import { createSharedStore, kitSharedApi } from "./shared.mjs";
 
 // Captured at load: the runner later replaces console.error to keep stdout clean, and kino.log
 // must not be routed through that replacement (it would print two prefixes).
@@ -604,6 +606,48 @@ export function tokenBucket(capacity, windowMs, now = Date.now) {
 const isUint8Array = (v) => ArrayBuffer.isView(v) && Object.prototype.toString.call(v) === "[object Uint8Array]";
 const plainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
+// ---------- Task 8j: the player gate's limits (PanelPlayerGate, contract.kinoPlayerControl) ----------
+
+/**
+ * One plugin's player gate as the app keeps it (PanelPlayerGate): a pause never while [casting]() (the phone's player held for a
+ * cast) and never when it asks for the state the video is already in ([paused]); one seek or pause per minIntervalMs; and for
+ * a controlled action (kept only thanks to playerControl): nothing while [held]() (Kino not in front, a Kino dialog, the person
+ * seeking), only pause on live, at most perMinute in windowMs, and at most one action of any field per minIntervalMs.
+ * `check(action, { live, controlled, paused }, log)` answers what is left of [action] (seekToMs, pause and the other fields as
+ * given; the duration clamp is gatePlayer's) or null. [now] is the clock.
+ */
+export function playerControlGate({ now = Date.now, held = () => false, casting = () => false } = {}) {
+  const P = contract.kinoPlayerControl;
+  let lastAt = null;
+  const times = [];
+  return {
+    check(action, { live = false, controlled = false, paused = false } = {}, log = () => {}) {
+      if (controlled && held()) { log("panel: player action while Kino is not in front, a Kino dialog is open or the person is seeking, dropped"); return null; }
+      let b = { ...action };
+      if (b.pause !== undefined && casting()) { log("panel: player.pause while casting, dropped (the phone's player is held for the TV)"); delete b.pause; }
+      if (b.pause !== undefined && b.pause === paused) { log("panel: player.pause changes nothing (the video is already so), dropped"); delete b.pause; }
+      if (controlled && live && Object.keys(b).some((k) => k !== "pause")) {
+        log("panel: on a live stream a controlled player action only pauses or resumes, the rest dropped");
+        b = b.pause !== undefined ? { pause: b.pause } : {};
+      }
+      if (!Object.keys(b).length) return null;
+      const t = now();
+      const recent = lastAt !== null && t - lastAt < P.minIntervalMs;
+      if (controlled) {
+        while (times.length && t - times[0] >= P.windowMs) times.shift();
+        if (times.length >= P.perMinute) { log(`panel: more than ${P.perMinute} controlled player actions a minute, dropped`); return null; }
+        if (recent) { log("panel: a controlled player action more than once per second, dropped"); return null; }
+      }
+      if (b.seekToMs !== undefined && recent) { log("panel: player.seekToMs more than once per second, dropped"); delete b.seekToMs; }
+      if (b.pause !== undefined && recent) { log("panel: player.pause more than once per second, dropped"); delete b.pause; }
+      if (controlled || b.seekToMs !== undefined || b.pause !== undefined) lastAt = t;
+      if (!Object.keys(b).length) return null;
+      if (controlled) times.push(t);
+      return b;
+    },
+  };
+}
+
 /** Kino 0.9.55's title normalisation (KinoMetaTitleMatch.normalise): lowercase, no accents, punctuation and spaces as one space. */
 export function normaliseMetaTitle(title) {
   return String(title).toLowerCase().normalize("NFD").replace(/\p{Mn}+/gu, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
@@ -782,10 +826,29 @@ function deviceFor(device, env) {
  * answers kino.tmdb offline, keyed `"<path>?<sorted query>"` or `"<path>"`, standing in for TMDB and a configured key.
  * [now] is the clock of their rate limits and cache.
  *
+ * kino.library (apiVersion 14, capability "library", contract.kinoLibrary): [libraryFixture] (an object, or a file path; default env
+ * KINO_LIBRARY_FIXTURE) stands in for what the person watched and saved: `{ "watched": [{ title, year?, kind, ids?, progress?,
+ * watchedAtMs, adult? }], "saved": [{ title, year?, kind, ids?, savedAtMs?, adult? }] }`. The kit applies the app's rules to it: a
+ * manifest without the capability, a [libraryRevoked] kit (or KINO_LIBRARY_REVOKED=1: the person switched it off) or a sync call
+ * gets permission_denied; a wrong option bad_request; past contract.kinoLibrary.perMinute calls rate_limited; an `adult` entry is
+ * never given; the newest first, at most `limit`, `watchedAtMs` rounded down to the day; only the contract's fields. Without a
+ * fixture both functions answer [] (the kit has no library of its own). [callFunction]: the export run.mjs/validate.mjs runs; one
+ * outside contract.kinoLibrary.fromFunctions (resolve, episodes, sign...) gets permission_denied, as in the app.
+ *
+ * kino.room (apiVersion 14, capability "room", contract.kinoRoom): [room] (default a fresh [createKitRoom]) is an in-memory room
+ * with two simulated members standing in for the Internet; the kit applies the app's rules (PluginRooms): the capability,
+ * [roomRevoked] (or KINO_ROOM_REVOKED=1), open/join only from contract.kinoRoom.openFrom, traffic from trafficFrom, never a sync
+ * call, the payload, rate, member and session limits, and the error codes.
+ *
+ * kino.ai (apiVersion 14, capability "ai", contract.kinoAi): [ai] is the fake text AI (`async ({ system, prompt, json, maxChars })
+ * => string | { text, model? } | { error } | null`); without it env KINO_AI_ERROR / KINO_AI_REPLY, else a canned sentence ("{}" for
+ * json). [aiRevoked] (or KINO_AI_REVOKED=1) refuses every ask. The app's gates apply ([kitAiApi]): the origin, the request,
+ * one in flight, perMinute, perDay, timeoutMs; an ask never throws.
+ *
  * kino.device (Kino 0.9.55, contract.kinoDevice): [device] ("phone" or "tv", run.mjs --device), else env KINO_DEVICE,
  * else "phone". Anything else throws: a typo must not silently test the other UI.
  */
-export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", device = undefined, storageFile = null, cookiesFile = null, secretsFile = null, config = {}, record = null, replay = null, fetchImpl = globalThis.fetch, metaFixture = undefined, tmdbKey = undefined, tmdbFixture = undefined, nuvioFixture = undefined, env = process.env, now = Date.now, syncCall = false, qrScan = undefined } = {}) {
+export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", device = undefined, storageFile = null, cookiesFile = null, secretsFile = null, config = {}, record = null, replay = null, fetchImpl = globalThis.fetch, metaFixture = undefined, tmdbKey = undefined, tmdbFixture = undefined, nuvioFixture = undefined, libraryFixture = undefined, libraryRevoked = false, callFunction = null, env = process.env, now = Date.now, syncCall = false, qrScan = undefined, room = undefined, roomRevoked = false, ai = undefined, aiRevoked = false, shared = undefined } = {}) {
   const f = contract.fetch;
   // [syncCall]: this kino runs a syncProvider's syncPull/syncPush (contract.fetch.syncCall): its requests and responses may
   // carry the declared blob, ceil(sync.maxBlobBytes * 4/3) + envelopeChars, like the app; every other call keeps the defaults.
@@ -859,10 +922,11 @@ export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", devic
   });
 
   const values = {};
+  // A url setting never takes a manifest default (the app refuses one): only a typed server counts.
+  const defaultOf = (s) => (s.default !== undefined && contract.settings.types[s.type]?.canHaveDefault !== false ? s.default : s.type === "toggle" ? false : s.type === "select" ? s.options[0].value : undefined);
   for (const s of manifest.settings || []) {
     if (contract.settings.types[s.type]?.hasValue === false) continue; // section/status/action hold no value
-    // A url setting never takes a manifest default (the app refuses one): only a typed server counts.
-    const v = config[s.key] !== undefined ? config[s.key] : s.default !== undefined && contract.settings.types[s.type]?.canHaveDefault !== false ? s.default : s.type === "toggle" ? false : s.type === "select" ? s.options[0].value : undefined;
+    const v = config[s.key] !== undefined ? config[s.key] : defaultOf(s);
     if (s.type === "list") {
       // Entries with only their own fields, trimmed, all-blank ones dropped (what the app stores).
       const entries = (Array.isArray(v) ? v : []).map((e) => Object.fromEntries((s.fields || []).map((f) => [f.key, String(e?.[f.key] ?? "").trim()]))).filter((e) => Object.values(e).some(Boolean));
@@ -957,9 +1021,56 @@ export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", devic
     throw kinoError("invalid_request", "body must be a string, { json }, { form } or { base64 }");
   }
 
+  /** PluginSecrets.cutUtf8: [text]'s longest prefix of at most [max] UTF-8 bytes, never splitting a character. */
+  const cutUtf8 = (text, max) => {
+    let bytes = 0;
+    let out = "";
+    for (const ch of text) {
+      const n = Buffer.byteLength(ch, "utf8");
+      if (bytes + n > max) break;
+      bytes += n;
+      out += ch;
+    }
+    return out;
+  };
+
+  /** PluginHttp.asciiCompatible: a body whose ASCII bytes are always those characters (no charset: UTF-8). */
+  const asciiCompatible = (type) => {
+    const cs = ((/charset=([^;]+)/i.exec(type || "") || [])[1] || "utf-8").trim().toLowerCase();
+    return /^(utf-?8|us-ascii|ascii|iso-?8859-\d+|latin-?1|windows-125\d)$/.test(cs);
+  };
+  /** PluginHttp.asciiIndexOfIgnoreCase over a Buffer: [needle] holds lowercase ASCII bytes. */
+  const asciiIndexOfIgnoreCase = (data, needle, from) => {
+    for (let i = Math.max(0, from); i + needle.length <= data.length; i++) {
+      let j = 0;
+      for (; j < needle.length; j++) {
+        let b = data[i + j];
+        if (b >= 65 && b <= 90) b += 32;
+        if (b !== needle[j]) break;
+      }
+      if (j === needle.length) return i;
+    }
+    return -1;
+  };
+  /** PluginHttp.cutAtMarker: [text] up to and including the first ASCII case-insensitive [marker], else all of it. */
+  const cutAtMarker = (text, marker) => {
+    const m = marker.toLowerCase();
+    const lower = text.replace(/[A-Z]/g, (c) => c.toLowerCase());
+    const i = lower.indexOf(m);
+    return i < 0 ? text : text.slice(0, i + m.length);
+  };
+
+  /** The body's text as decoded for the plugin, before any redaction (the decode of [response]). */
+  const decodeBody = (bytes, type) => {
+    const charset = /charset=([^;]+)/i.exec(type || "");
+    const buf = Buffer.from(bytes);
+    if (!charset || /utf-?8/i.test(charset[1])) return buf.toString("utf8");
+    if (/^\s*(iso-?8859-1|latin-?1|us-ascii)\s*$/i.test(charset[1])) return buf.toString("latin1");
+    return new TextDecoder(charset[1].trim()).decode(buf);
+  };
   const textual = (type) => !type || /charset=/i.test(type) || /^text\//i.test(type) || /[/+](json|xml)\b/i.test(type) || /javascript|x-www-form-urlencoded/i.test(type);
 
-  function response(status, url, headerList, bytes) {
+  function response(status, url, headerList, bytes, truncated = null) {
     const headers = {};
     for (const [k, v] of headerList) if (!k.startsWith("set-cookie")) headers[k] = headers[k] ? headers[k] + ", " + redact(v) : redact(v);
     const buf = Buffer.from(bytes);
@@ -992,6 +1103,8 @@ export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", devic
     }
     return Object.freeze({
       ok: status >= 200 && status < 300, status, url: redact(url), headers: Object.freeze(headers),
+      // apiVersion 14 (fetch.maxBytes): whether the body was cut at maxBytes; absent below 14, as in the app.
+      ...(truncated === null ? {} : { truncated }),
       text: () => redact(textual(type) ? decode() : buf.toString("utf8")),
       json: () => JSON.parse(redact(textual(type) ? decode() : buf.toString("utf8"))),
       base64,
@@ -1025,6 +1138,30 @@ export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", devic
     if (!f.redirectModes.includes(redirect)) throw kinoError("invalid_request", 'redirect must be "follow" or "manual"');
     const headers = {};
     for (const k of Object.keys(o.headers || {})) headers[k] = String(o.headers[k]);
+    // apiVersion 14 (contract fetch.maxBytes, Task 7i-1): the body is read up to maxBytes, then the read stops and the
+    // answer says `truncated`. Below 14 the option is unknown and ignored, like the app's prelude.
+    const MB = f.maxBytes;
+    const cuts = featureApiVersion(manifest) >= MB.apiVersion;
+    let maxBytes = null;
+    if (cuts && o.maxBytes !== undefined && o.maxBytes !== null) {
+      if (!Number.isInteger(o.maxBytes) || o.maxBytes < MB.min || o.maxBytes > MB.max) throw kinoError("invalid_request", `maxBytes takes ${MB.min} to ${MB.max}`);
+      maxBytes = o.maxBytes;
+    }
+    // Task 8u (contract fetch.stopAt): end the read at a marker, printable ASCII, from the same apiVersion as maxBytes.
+    const SA = f.stopAt;
+    let stopAt = null;
+    if (featureApiVersion(manifest) >= SA.apiVersion && o.stopAt !== undefined && o.stopAt !== null) {
+      if (typeof o.stopAt !== "string" || o.stopAt.length < 1 || o.stopAt.length > SA.maxChars || /[^\x20-\x7e]/.test(o.stopAt)) {
+        throw kinoError("invalid_request", `stopAt takes 1 to ${SA.maxChars} printable ASCII characters`);
+      }
+      stopAt = o.stopAt;
+    }
+    // Fix round 3 (owner ruling), as DefaultPluginHost.secretSafeCut: with ANY sealed value the body is read whole (the
+    // ordinary cap: over it too_large), redacted whole, and only then cut (at stopAt, then maxBytes). Without one the read
+    // stops at maxBytes or the marker.
+    const readWhole = (maxBytes !== null || stopAt !== null) && pluginSecrets !== null && pluginSecrets !== undefined;
+    const readMax = readWhole ? null : maxBytes;
+    let truncated = false;
     let carriesSecret = false;
     // The size cap is checked BEFORE any substitution, on every body kind alike -- exactly like the
     // app, where the prelude computes it on the marker-laden request before it ever crosses to the
@@ -1115,6 +1252,7 @@ export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", devic
         ({ status, headers: headerList } = taped);
         headerList = headerList.map(([k2, v]) => [k2, uncanon(v)]);
         bytes = Buffer.from(taped.body, "base64");
+        if (readMax !== null && bytes.length > readMax) { bytes = bytes.subarray(0, readMax); truncated = true; }
         if (pluginSecrets) {
           const asText = bytes.toString("utf8");
           if (Buffer.from(asText, "utf8").equals(bytes)) {
@@ -1130,8 +1268,59 @@ export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", devic
         let r;
         try {
           r = await fetchImpl(current, { method, headers: sendHeaders, body: ["POST", "PUT", "PATCH"].includes(method) ? body ?? "" : undefined, redirect: "manual", signal: controller.signal });
-          bytes = Buffer.from(await r.arrayBuffer());
+          const isRedirect = [301, 302, 303, 307, 308].includes(r.status) && r.headers.get("location") && redirect === "follow";
+          const rType = r.headers.get("content-type") || undefined;
+          // A marker is looked for in decoded text: a byte answer is refused before its body is read (the app's rule).
+          if (stopAt !== null && !isRedirect && !textual(rType)) throw kinoError("invalid_request", "stopAt applies only to a text response");
+          const markerEarly = stopAt !== null && !readWhole && !isRedirect && asciiCompatible(rType);
+          if (markerEarly && r.body && typeof r.body.getReader === "function") {
+            // Read chunk by chunk until the marker (ASCII case-insensitive, found across chunk edges) or the bound.
+            const reader = r.body.getReader();
+            const limit = readMax ?? maxBodyBytes;
+            const needle = Buffer.from(stopAt.toLowerCase(), "latin1");
+            let all = Buffer.alloc(0);
+            let from = 0;
+            for (;;) {
+              const at = asciiIndexOfIgnoreCase(all, needle, from);
+              if (at >= 0 && at + needle.length <= limit) {
+                const end = at + needle.length;
+                let more = all.length > end;
+                if (!more) { const next = await reader.read(); more = !next.done && next.value.length > 0; }
+                await reader.cancel().catch(() => {});
+                bytes = all.subarray(0, end);
+                truncated = more;
+                break;
+              }
+              if (all.length > limit) {
+                await reader.cancel().catch(() => {});
+                if (readMax !== null) { bytes = all.subarray(0, readMax); truncated = true; } else bytes = all;
+                break;
+              }
+              from = Math.max(0, all.length - needle.length + 1);
+              const { done, value } = await reader.read();
+              if (done) { bytes = all; break; }
+              all = Buffer.concat([all, Buffer.from(value)]);
+            }
+          } else if (readMax !== null && r.body && typeof r.body.getReader === "function") {
+            // Read until maxBytes are in, then stop and drop the rest, as the app's Okio read does.
+            const reader = r.body.getReader();
+            const parts = [];
+            let got = 0;
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              parts.push(Buffer.from(value));
+              got += value.length;
+              if (got > readMax) { truncated = true; await reader.cancel().catch(() => {}); break; }
+            }
+            bytes = Buffer.concat(parts).subarray(0, readMax);
+          } else {
+            bytes = Buffer.from(await r.arrayBuffer());
+            if (readMax !== null && bytes.length > readMax) { bytes = bytes.subarray(0, readMax); truncated = true; }
+          }
         } catch (e) {
+          // Kino's own refusal of this answer (stopAt on a byte answer) goes out as it is.
+          if (e && e.code === "invalid_request") throw e;
           if (controller.signal.aborted) throw kinoError("timeout", "the request took too long");
           // Not cut to 200 chars for a sealed request: its detail may quote what the server echoed
           // back, and a value straddling the cut would leave a piece redaction can't recognize --
@@ -1170,7 +1359,34 @@ export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", devic
         current = new URL(location[1], current);
         continue;
       }
-      return response(status, current.toString(), headerList, bytes);
+      const finalType = (headerList.find(([k]) => k === "content-type") || [])[1];
+      const followsRedirect = [301, 302, 303, 307, 308].includes(status) && headerList.find(([k]) => k === "location") && redirect === "follow";
+      if (stopAt !== null && !followsRedirect && !textual(finalType)) throw kinoError("invalid_request", "stopAt applies only to a text response");
+      if (stopAt !== null && !readWhole && !followsRedirect) {
+        // The marker, in decoded text (a charset whose bytes are not ASCII-compatible was read as without stopAt).
+        const decoded = decodeBody(bytes, finalType);
+        const cut = cutAtMarker(decoded, stopAt);
+        if (cut.length < decoded.length || !asciiCompatible(finalType)) {
+          const cutHeaders = headerList.map(([k, v]) => (k === "content-type" ? [k, "text/plain; charset=utf-8"] : [k, v]));
+          return response(status, current.toString(), cutHeaders, Buffer.from(cut, "utf8"), truncated || cut.length < decoded.length);
+        }
+      }
+      if (readWhole) {
+        // Read whole: decode in its own charset, redact the WHOLE text, then cut it to maxBytes (UTF-8, never inside a
+        // character). No value is ever partly read, so none can be partly shown. A binary body is not scanned, as without
+        // maxBytes: its bytes are cut.
+        const type = (headerList.find(([k]) => k === "content-type") || [])[1];
+        if (textual(type)) {
+          const redacted = redact(decodeBody(bytes, type));
+          // stopAt is searched in the REDACTED text, so a marker made to match inside a sealed value matches nothing of it.
+          const atMarker = stopAt !== null ? cutAtMarker(redacted, stopAt) : redacted;
+          const cut = maxBytes !== null ? cutUtf8(atMarker, maxBytes) : atMarker;
+          const cutHeaders = headerList.map(([k, v]) => (k === "content-type" ? [k, "text/plain; charset=utf-8"] : [k, v]));
+          return response(status, current.toString(), cutHeaders, Buffer.from(cut, "utf8"), cut.length < redacted.length);
+        }
+        if (maxBytes !== null && bytes.length > maxBytes) { bytes = bytes.subarray(0, maxBytes); truncated = true; }
+      }
+      return response(status, current.toString(), headerList, bytes, cuts ? truncated : null);
     }
     throw kinoError("network", "too many redirects");
   }
@@ -1542,6 +1758,76 @@ export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", devic
     return body;
   }
 
+  // --- kino.library (apiVersion 14, capability "library"): the app reads the active profile's history and favorites; the kit
+  // answers from a fixture with the app's rules (PluginLibraryBridge), so a plugin sees the same refusals and the same shape.
+  const LB = contract.kinoLibrary;
+  const libraryBucket = tokenBucket(LB.perMinute, 60_000, now);
+  const libraryFixtureFile = libraryFixture === undefined ? env.KINO_LIBRARY_FIXTURE : libraryFixture;
+  const libraryData = typeof libraryFixtureFile === "string" && libraryFixtureFile ? readJsonFile(libraryFixtureFile, "KINO_LIBRARY_FIXTURE") : plainObject(libraryFixtureFile) ? libraryFixtureFile : {};
+  const libraryOff = libraryRevoked || env.KINO_LIBRARY_REVOKED === "1";
+  const dayOf = (ms) => ms - (((ms % LB.dayMs) + LB.dayMs) % LB.dayMs);
+  const libraryEntry = (e, watched) => {
+    const out = { title: String(e.title).slice(0, LB.maxTitleChars) };
+    if (Number.isInteger(e.year)) out.year = e.year;
+    out.kind = e.kind;
+    out.ids = {};
+    if (plainObject(e.ids)) {
+      if (Number.isInteger(e.ids.tmdb) && e.ids.tmdb > 0) out.ids.tmdb = e.ids.tmdb;
+      if (typeof e.ids.imdb === "string" && /^tt\d{5,10}$/.test(e.ids.imdb)) out.ids.imdb = e.ids.imdb;
+    }
+    if (watched) {
+      const p = Math.min(1, Math.max(0, typeof e.progress === "number" && Number.isFinite(e.progress) ? e.progress : 0));
+      out.progress = Math.round(p / LB.progressStep) / Math.round(1 / LB.progressStep);
+      out.watchedAtMs = dayOf(e.watchedAtMs);
+    }
+    return out;
+  };
+  async function libraryCall(op, options) {
+    await null;
+    if (!(manifest.capabilities || []).includes(LB.capability) || libraryOff) {
+      throw kinoError("permission_denied", 'kino.library needs the "library" capability, approved by the person');
+    }
+    // Task 8q: a job's own run (run.mjs ... job) reads it too, with the same approval (PluginLibrary.FROM_JOB).
+    if (syncCall || (callFunction !== null && !LB.fromFunctions.includes(callFunction) && callFunction !== contract.kinoJobs.export)) {
+      throw kinoError("permission_denied", `kino.library only answers while the person uses the plugin (${LB.fromFunctions.join(", ")})`);
+    }
+    const bad = () => kinoError("bad_request", "kino.library: limit is a whole number from 1, kind is \"movie\" or \"series\", sinceMs (watched only) a whole number from 0");
+    if (options !== undefined && options !== null && !plainObject(options)) throw bad();
+    const o = options || {};
+    if (o.limit !== undefined && o.limit !== null && !(Number.isInteger(o.limit) && o.limit >= 1)) throw bad();
+    if (o.kind !== undefined && o.kind !== null && !LB.kinds.includes(o.kind)) throw bad();
+    if (o.sinceMs !== undefined && o.sinceMs !== null && (op !== "watched" || !(Number.isInteger(o.sinceMs) && o.sinceMs >= 0))) throw bad();
+    if (!libraryBucket.take()) throw kinoError("rate_limited", `too many kino.library calls (at most ${LB.perMinute} a minute)`);
+    const limit = Math.min(LB.maxLimit, o.limit ?? LB.defaultLimit);
+    const watched = op === "watched";
+    const rows = (Array.isArray(libraryData[op]) ? libraryData[op] : [])
+      .filter((e) => plainObject(e) && e.adult !== true && typeof e.title === "string" && LB.kinds.includes(e.kind))
+      .filter((e) => !watched || Number.isInteger(e.watchedAtMs))
+      .filter((e) => o.kind === undefined || o.kind === null || e.kind === o.kind)
+      // sinceMs is rounded down to the day and compared with the rounded time, as in the app: no finer time can be probed.
+      .filter((e) => !watched || o.sinceMs === undefined || o.sinceMs === null || dayOf(e.watchedAtMs) >= dayOf(o.sinceMs))
+      .sort((a, b) => (watched ? b.watchedAtMs - a.watchedAtMs : (b.savedAtMs || 0) - (a.savedAtMs || 0)));
+    return rows.slice(0, limit).map((e) => libraryEntry(e, watched));
+  }
+  const libraryApi = Object.freeze({
+    watched: (options) => libraryCall("watched", options),
+    saved: (options) => libraryCall("saved", options),
+  });
+
+  // --- kino.room (apiVersion 14, capability "room"): an in-memory room with two simulated members (createKitRoom). ---
+  const roomApi = kitRoomApi(manifest, room || createKitRoom({ now }), { revoked: roomRevoked || env.KINO_ROOM_REVOKED === "1", callFunction, syncCall, now });
+
+  // --- kino.ai (apiVersion 14, capability "ai", Task 8r): a fake text AI with the app's gates (kitAiApi). The origin is the export
+  // running (kitCall, else [callFunction]) with its screen marks; a job's run is the export contract.kinoAi.fromJob. ---
+  const aiApi = kitAiApi(manifest, {
+    model: ai, revoked: aiRevoked, syncCall, env, now,
+    origin: () => {
+      const o = currentQrOrigin();
+      const fn = o.fn ?? callFunction ?? undefined;
+      return { ...o, fn, job: fn === contract.kinoAi.fromJob, takeRequest: kitJobRequest.getStore() };
+    },
+  });
+
   // --- kino.ws (apiVersion 13, capability "socket"): the app's PluginWebSocket over Node's global WebSocket. wss:// only,
   // a host the manifest declares (never an IP literal or a local name, which cannot be declared), at most
   // contract.socket.maxSockets open, at most contract.socket.maxQueuedBytes queued unread (then `limit`). ---
@@ -1650,9 +1936,8 @@ export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", devic
   // cancel); it may throw a kinoError (permission_denied, ...). Without it, and on a TV (device "tv"), the scan is
   // unavailable, as on a device without a camera. A text the app would not accept (empty, over contract.qr.maxScanChars)
   // is not taken: the app's scanner would keep looking until its timeout, so the kit answers timeout at once. ---
-  // PluginQrScanner.QR_FUNCTIONS and FORMAT_RANGES (prelude.js has the same list): where a scan may start, and the
-  // characters a title may not hold (every ISO control, every Unicode format character, the line and paragraph separators).
-  const QR_FUNCTIONS = [contract.settings.ui.exports.action, contract.manifest.panel.exports.action];
+  // FORMAT_RANGES (prelude.js has the same list): the characters a title may not hold (every ISO control, every Unicode
+  // format character, the line and paragraph separators). Where a scan may start is qrScanOriginAllowed (kit-call.mjs).
   const QR_REFUSED = [[0x00AD, 0x00AD], [0x0600, 0x0605], [0x061C, 0x061C], [0x06DD, 0x06DD], [0x070F, 0x070F], [0x0890, 0x0891], [0x08E2, 0x08E2],
     [0x180E, 0x180E], [0x200B, 0x200F], [0x2028, 0x202E], [0x2060, 0x2064], [0x2066, 0x206F], [0xFEFF, 0xFEFF], [0xFFF9, 0xFFFB],
     [0x110BD, 0x110BD], [0x110CD, 0x110CD], [0x13430, 0x1343F], [0x1BCA0, 0x1BCA3], [0x1D173, 0x1D17A], [0xE0001, 0xE0001], [0xE0020, 0xE007F]];
@@ -1677,7 +1962,7 @@ export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", devic
       }
       // The app's order: the request, the device, where the call comes from, the open scan.
       if (kinoDevice === "tv" || typeof qrScan !== "function") throw kinoError("unavailable", "kino.qr.scan: this device can't scan a QR code (a TV, or a device without a camera)");
-      if (!QR_FUNCTIONS.includes(kitCall.getStore())) throw kinoError("not_allowed", "kino.qr.scan only runs from a settings action or panelAction");
+      if (!qrScanOriginAllowed(currentQrOrigin())) throw kinoError("not_allowed", "kino.qr.scan only runs from a settings action, panelAction or screenEvent the person pressed");
       if (open) throw kinoError("busy", "kino.qr.scan: a scan is already open");
       open = true;
       try {
@@ -1710,6 +1995,10 @@ export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", devic
     seed: kinoSeed,
     // Kino 0.9.74 (contract.additiveFromApp["kino.sync.remoteChanged"]): a realtime syncProvider signals its remote changed.
     sync: kinoSync,
+    // apiVersion 14 (contract.manifest.screen.widgets): the widgets this Kino draws (their older names) and the type names the
+    // docs list (contract.manifest.screen.aliases.names), for feature detection; `version` is the screen contract's own, 1
+    // until a widget changes meaning.
+    screen: Object.freeze({ widgets: Object.freeze([...contract.manifest.screen.widgets]), names: Object.freeze([...contract.manifest.screen.aliases.names]), version: 1 }),
     fetch: fetchGated,
     html: Object.freeze({
       select() {
@@ -1801,6 +2090,18 @@ export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", devic
     // Kino 0.9.71 (apiVersion 11, capability "nuvio"): the scrapers of the Nuvio repositories the manifest names. Feature-detect
     // it: typeof kino.nuvio === "object".
     nuvio: nuvioApi,
+    // apiVersion 14 (contract.kinoLibrary): what the person watched and saved, read-only, with the "library" capability approved.
+    // Present on every apiVersion 14 kino, like the app's: feature-detect with typeof kino.library === "object". A plugin of an
+    // older apiVersion that adds the library through an enhancement runs on such a Kino too (featureApiVersion).
+    ...(featureApiVersion(manifest) >= LB.apiVersion ? { library: libraryApi } : {}),
+    // apiVersion 14 (contract.kinoRoom): present on every apiVersion 14 kino, like the app's (typeof kino.room === "object").
+    ...(featureApiVersion(manifest) >= contract.kinoRoom.apiVersion ? { room: roomApi } : {}),
+    // apiVersion 14 (contract.kinoAi): present on every apiVersion 14 kino, like the app's (typeof kino.ai === "object"); an ask
+    // never throws: { ok: true, text, model } or { ok: false, error, message }.
+    ...(featureApiVersion(manifest) >= contract.kinoAi.apiVersion ? { ai: aiApi } : {}),
+    // apiVersion 14 (contract.kinoShared, Task 8q-2): one simulated device's store ([shared], createSharedDevices().phone or
+    // .tv; a fresh one when none is given). Present on every apiVersion 14 kino, like the app's (typeof kino.shared === "object").
+    ...(featureApiVersion(manifest) >= contract.kinoShared.apiVersion ? { shared: kitSharedApi(manifest, shared ?? createSharedStore({ now }), { now }) } : {}),
     // apiVersion 6: the app opens a hidden WebView; Node has none, so the kit answers as a device without one would.
     // A plugin's resolve should already fall back (another server, a plain kino.fetch path) on this code.
     // kino.browser.page ("browser": "pages", apiVersion 6) answers the same: a plugin keeps a plain kino.fetch path for it too.
@@ -1847,6 +2148,23 @@ export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", devic
     servers: servers.map((s) => s.toString()),
     resetBudget: () => { requests = 0; },
     saveTape: () => { if (record && tape) saveJson(record, tape); },
+    /**
+     * A screen answer's `config`, already checked (screen.mjs checkScreenAnswer with the manifest's settings): written into
+     * the kit's settings, so a later `kino.config.get/all` of this run reads it, as the app's would. `null` empties a setting
+     * (its default again). Only the types a screen may write (never a password or a url); a list that would gain an address the
+     * kit's settings do not hold is not written, as in the app. Returns the app's line for each key it does not write.
+     */
+    writeConfig: (changes) => {
+      const notWritten = [];
+      for (const [k, v] of Object.entries(changes || {})) {
+        const s = (manifest.settings || []).find((x) => x.key === k);
+        if (!s || !contract.manifest.screen.configTypes.includes(s.type)) { notWritten.push(`screen: setting "${k.slice(0, 40)}" cannot be written from a screen, not written`); continue; }
+        if (s.type === "list" && !keepsAddresses(s, v, values[k])) { notWritten.push(`screen: setting "${k}" would gain an address the person did not type, not written`); continue; }
+        const d = v === null || v === undefined ? defaultOf(s) : v;
+        if (d === undefined || d === "") delete values[k]; else values[k] = d;
+      }
+      return notWritten;
+    },
   };
 }
 
@@ -1871,6 +2189,11 @@ export function signingLane(kino) {
     meta: async () => { throw why("kino.meta"); },
     tmdb: async () => { throw why("kino.tmdb"); },
     nuvio: Object.freeze({ available: async () => { throw why("kino.nuvio"); }, use: async () => { throw why("kino.nuvio"); }, scrapers: async () => { throw why("kino.nuvio"); }, streams: async () => { throw why("kino.nuvio"); } }),
+    ...(kino.library ? { library: Object.freeze({ watched: async () => { throw why("kino.library"); }, saved: async () => { throw why("kino.library"); } }) } : {}),
+    ...(kino.room ? { room: Object.freeze(Object.fromEntries(contract.kinoRoom.functions.map((n) => [n, async () => { throw why("kino.room"); }]))) } : {}),
+    // kino.ai.ask never throws: the lane answers its refusal as data (prelude.js).
+    ...(kino.ai ? { ai: Object.freeze({ ask: async () => Object.freeze({ ok: false, error: "refused", message: "sign() can't use kino.ai: whatever you need must come in signContext" }) }) } : {}),
+    ...(kino.shared ? { shared: Object.freeze({ get: refused("kino.shared"), set: refused("kino.shared") }) } : {}),
     ...(kino.browser ? { browser: Object.freeze({ captureAll: true, capture: async () => { throw why("kino.browser"); }, ...(kino.browser.page ? { page: async () => { throw why("kino.browser"); } } : {}) }) } : {}),
   });
 }
@@ -2219,4 +2542,408 @@ export async function askImage(plugin, manifest, ref, { timeoutMs = contract.ima
   });
   imageTurns.set(plugin, run);
   return run;
+}
+
+// --- kino.room (apiVersion 14, capability "room", Task 8l, contract.kinoRoom) -------------------------------------------------
+// The app's rules (PluginRoomPayload, PluginRooms), shared through test/room-cases.json. The kit has no tunnel: createKitRoom is an
+// in-memory room with two simulated members, so a plugin's room logic runs offline with the same answers and refusals.
+
+const RL = contract.kinoRoom.limits;
+const ROOM_SPACES = /[ \t\n\v\f\r]+/g;
+const ROOM_SCRUB = /[\p{Cc}\p{Cf}\u2028\u2029]/gu;
+
+/** The plugin's JSON text as a room payload: `{ ok: true, value }` or `{ ok: false, why }` (PluginRoomPayload.check). */
+export function roomPayloadVerdict(text) {
+  if (typeof text !== "string") return { ok: false, why: "the payload must be an object" };
+  if (Buffer.byteLength(text, "utf8") > RL.maxPayloadBytes) return { ok: false, why: `the payload is over ${RL.maxPayloadBytes} bytes` };
+  // Counted on the raw text before parsing, as the app does (PluginRoomPayload.rawDepth): strings skipped.
+  if (roomRawDepth(text, RL.maxPayloadDepth) > RL.maxPayloadDepth) return { ok: false, why: `the payload is deeper than ${RL.maxPayloadDepth} levels` };
+  let value;
+  try { value = JSON.parse(text); } catch { return { ok: false, why: "the payload is not JSON" }; }
+  if (!plainObject(value)) return { ok: false, why: "the payload must be an object" };
+  const depth = (v) => (Array.isArray(v) ? 1 + Math.max(0, ...v.map(depth)) : plainObject(v) ? 1 + Math.max(0, ...Object.values(v).map(depth)) : 0);
+  if (depth(value) > RL.maxPayloadDepth) return { ok: false, why: `the payload is deeper than ${RL.maxPayloadDepth} levels` };
+  return { ok: true, value };
+}
+
+/** The deepest nesting of objects and arrays in JSON [text], without parsing (PluginRoomPayload.rawDepth). */
+export function roomRawDepth(text, limit) {
+  let depth = 0;
+  let max = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === "{" || c === "[") { depth++; if (depth > max) { max = depth; if (max > limit) return max; } }
+    else if (c === "}" || c === "]") { if (depth > 0) depth--; }
+    // Strict JSON only, as the app (review N1): the words true/false/null whole, else only separators and number characters.
+    else if (c === "t" || c === "f" || c === "n") {
+      const word = ["true", "false", "null"].find((w) => text.startsWith(w, i));
+      if (!word) return Number.MAX_SAFE_INTEGER;
+      i += word.length - 1;
+    }
+    else if (!ROOM_STRICT_OUTSIDE.has(c)) return Number.MAX_SAFE_INTEGER;
+  }
+  return max;
+}
+const ROOM_STRICT_OUTSIDE = new Set(":, \t\n\r0123456789+-.eE");
+
+/** A display name as Kino keeps it (PluginRoomPayload.name): breaks as spaces, scrubbed, collapsed, trimmed, at most [max] code points. */
+export function roomName(raw, max) {
+  const s = String(raw ?? "").replace(ROOM_SPACES, " ").replace(ROOM_SCRUB, "").replace(ROOM_SPACES, " ").trim();
+  const points = Array.from(s);
+  return points.length <= max ? s : points.slice(0, max).join("").trim();
+}
+
+/** A typed room code as Kino reads it (PluginRoomCrypto.normalizeCode): spaces and hyphens dropped, codeDigits.min to .max digits, or null. */
+export function roomCode(raw) {
+  if (typeof raw !== "string") return null;
+  const s = raw.replace(/[ -]/g, "");
+  const D = contract.kinoRoom.codeDigits;
+  return new RegExp(`^[0-9]{${D.min},${D.max}}$`).test(s) ? s : null;
+}
+
+/** One member's sending budget (RoomRateWindow): perSecond, perMinute and bytesPerMinute. */
+function roomRateWindow(now) {
+  const sent = [];
+  return (bytes) => {
+    const t = now();
+    while (sent.length && t - sent[0].at >= 60_000) sent.shift();
+    if (sent.filter((s) => t - s.at < 1000).length >= RL.perSecond) return false;
+    if (sent.length >= RL.perMinute) return false;
+    if (sent.reduce((n, s) => n + s.bytes, 0) + bytes > RL.bytesPerMinute) return false;
+    sent.push({ at: t, bytes });
+    return true;
+  };
+}
+
+/** A bounded mailbox (RoomMailbox): the last mailboxEvents of the last mailboxMs, seq only grows. */
+function roomMailbox(now) {
+  const events = [];
+  let next = 1;
+  const prune = () => { while (events.length && now() - events[0].at > RL.mailboxMs) events.shift(); };
+  return {
+    add(from, kind, payload, name) {
+      prune();
+      const e = { seq: next++, from, kind, at: now() };
+      if (payload !== undefined) e.payload = payload;
+      if (name !== undefined) e.name = name;
+      events.push(e);
+      while (events.length > RL.mailboxEvents) events.shift();
+    },
+    after(since, limit) {
+      prune();
+      const out = events.filter((e) => e.seq > since);
+      return { events: out.slice(0, limit).map(({ at, ...e }) => JSON.parse(JSON.stringify(e))), more: out.length > limit };
+    },
+  };
+}
+
+/**
+ * The kit's stand-in for the Internet a room lives on: two simulated members. When the plugin opens a room, "Bea" (mbea0001)
+ * and "Caro" (mcaro002) join it at once; a test makes them speak with [say] and leave with [leave], and reads what they got in
+ * [received]. A room to join is waiting at [remote] (its words and code): its simulated host is "Kit" and "Bea" is a guest
+ * there too. Any other words are room_unreachable, a wrong code room_denied.
+ */
+export function createKitRoom({ now = Date.now } = {}) {
+  const sims = [{ memberId: "mbea0001", name: "Bea" }, { memberId: "mcaro002", name: "Caro" }];
+  const received = Object.fromEntries(sims.map((s) => [s.memberId, []]));
+  const remote = { words: "kit-remote-room-words", code: "111122223333", hostName: "Kit" };
+  return { sims, received, remote, now, hosted: null, joined: [], created: new Map(), say: null, leave: null };
+}
+
+/** kino.room over [kitRoom] for [manifest] (createKino wires it), with the app's gates. */
+function kitRoomApi(manifest, kitRoom, { revoked, callFunction, syncCall, now }) {
+  const R = contract.kinoRoom;
+  const declared = () => (manifest.capabilities || []).includes(R.capability) && !revoked;
+  const deny = (why) => kinoError("permission_denied", `kino.room ${why}`);
+  const bad = (why) => kinoError("bad_request", `kino.room: ${why}`);
+  const gate = (op) => {
+    if (!declared()) throw deny('needs the "room" capability, approved and switched on');
+    if (syncCall) throw deny("never answers a background call");
+    if ((op === "open" || op === "join") && callFunction !== null && !R.openFrom.includes(callFunction)) throw deny(`.${op} only runs from the person's own action (${R.openFrom.join(", ")})`);
+    if (["send", "inbox", "members"].includes(op) && callFunction !== null && !R.trafficFrom.includes(callFunction)) throw deny(`.${op} only runs from an open screen or panel`);
+  };
+  const intIn = (o, k, min, max, dflt) => {
+    if (o[k] === undefined || o[k] === null) return dflt;
+    if (!Number.isInteger(o[k]) || o[k] < min || o[k] > max) throw bad(`${k} must be a whole number from ${min} to ${max}`);
+    return o[k];
+  };
+  const opts = (o) => { if (o !== undefined && o !== null && !plainObject(o)) throw bad("the options must be an object"); return o || {}; };
+  const select = (o) => {
+    const s = o.session;
+    let found;
+    if (s === undefined || s === null) found = kitRoom.joined[0] || kitRoom.hosted;
+    else if (s === R.hostedSession) found = kitRoom.hosted;
+    else if (typeof s === "string") found = kitRoom.joined.find((j) => j.handle === s);
+    else throw bad('session must be "hosted" or a handle from join');
+    if (!found) throw kinoError("room_closed", "kino.room: not in that room");
+    return found;
+  };
+  const membersOf = (session) => session.members.map((m) => ({ memberId: m.memberId, name: m.name, host: m.memberId === R.hostId }));
+
+  kitRoom.say = (memberId, payload, { to } = {}) => {
+    const p = roomPayloadVerdict(JSON.stringify(payload));
+    if (!p.ok) throw new Error(p.why);
+    if (kitRoom.hosted && kitRoom.hosted.members.some((m) => m.memberId === memberId)) kitRoom.hosted.mailbox.add(memberId, "msg", p.value);
+    for (const j of kitRoom.joined) if (to === undefined || to === j.memberId) j.mailbox.add(memberId, "msg", p.value);
+  };
+  kitRoom.leave = (memberId) => {
+    for (const s of [kitRoom.hosted, ...kitRoom.joined].filter(Boolean)) {
+      if (!s.members.some((m) => m.memberId === memberId)) continue;
+      s.members = s.members.filter((m) => m.memberId !== memberId);
+      s.mailbox.add(memberId, memberId === R.hostId ? "closed" : "leave");
+    }
+  };
+
+  const api = {
+    async open(options) {
+      await null;
+      gate("open");
+      const o = opts(options);
+      const ttl = intIn(o, "ttlMin", RL.minTtlMin, RL.maxTtlMin, RL.defaultTtlMin);
+      const max = intIn(o, "max", RL.minMembers, RL.maxMembers, RL.defaultMembers);
+      // Task 8w: a shorter code on request (contract.kinoRoom.codeDigits).
+      const digits = intIn(o, "codeDigits", R.codeDigits.min, R.codeDigits.max, R.codeDigits.default);
+      let code = null;
+      let expiresAtMs = now() + ttl * 60_000;
+      if (o.code !== undefined) {
+        code = roomCode(o.code);
+        if (!code) throw bad(`code must be ${R.codeDigits.min} to ${R.codeDigits.max} digits`);
+        if (o.codeDigits !== undefined && o.codeDigits !== code.length) throw bad("codeDigits does not match the code");
+        const inRoom = kitRoom.joined.find((j) => j.code === code)?.expiresAtMs ?? (kitRoom.created.get(code) > now() ? kitRoom.created.get(code) : undefined);
+        if (inRoom === undefined) throw deny(".open: that code is not of a room this plugin is in");
+        expiresAtMs = Math.min(expiresAtMs, inRoom);
+      }
+      if (kitRoom.hosted) throw kinoError("room_busy", "kino.room.open: this device already hosts a room");
+      if (kitRoom.joined.length >= RL.maxSlotsPerPlugin) throw kinoError("room_busy", `kino.room: this plugin already holds ${RL.maxSlotsPerPlugin} of this device's rooms`);
+      code = code || Array.from({ length: digits }, () => Math.floor(Math.random() * 10)).join("");
+      const words = `kit-room-words-${kitRoom.created.size + 1}`;
+      const mailbox = roomMailbox(now);
+      const hosted = { code, words, expiresAtMs, max, mailbox, rate: roomRateWindow(now), name: roomName(o.name, RL.maxHostNameChars), members: [{ memberId: R.hostId, name: roomName(o.name, RL.maxHostNameChars) }] };
+      for (const s of kitRoom.sims.slice(0, max - 1)) { hosted.members.push({ ...s }); mailbox.add(s.memberId, "join", undefined, s.name); }
+      kitRoom.hosted = hosted;
+      kitRoom.created.set(code, expiresAtMs);
+      return { code, words, expiresAtMs };
+    },
+    async join(options) {
+      await null;
+      gate("join");
+      const o = opts(options);
+      const words = typeof o.words === "string" ? o.words.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0].replace(/\.trycloudflare\.com$/, "") : "";
+      if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(words)) throw bad("words are the endpoint's words");
+      const code = roomCode(o.code);
+      if (!code) throw bad(`code must be ${R.codeDigits.min} to ${R.codeDigits.max} digits`);
+      const same = kitRoom.joined.find((j) => j.code === code);
+      if (!same && kitRoom.joined.length >= RL.maxJoined) throw kinoError("room_busy", `kino.room.join: this device is already in ${RL.maxJoined} rooms`);
+      if (!same && kitRoom.joined.length + (kitRoom.hosted ? 1 : 0) >= RL.maxSlotsPerPlugin) throw kinoError("room_busy", `kino.room: this plugin already holds ${RL.maxSlotsPerPlugin} of this device's rooms`);
+      if (kitRoom.hosted && kitRoom.hosted.words === words) throw bad("that is this device's own room");
+      if (words !== kitRoom.remote.words) throw kinoError("room_unreachable", "kino.room: the room can't be reached");
+      // Task 8w: after limits.maxFailedJoins wrong codes in all, the remote room closes itself, as the app's host does.
+      if (kitRoom.remote.closed) throw kinoError("room_closed", "kino.room: the room is closed");
+      if (code !== kitRoom.remote.code) {
+        kitRoom.remote.failedJoins = (kitRoom.remote.failedJoins || 0) + 1;
+        if (kitRoom.remote.failedJoins >= RL.maxFailedJoins) kitRoom.remote.closed = true;
+        throw kinoError("room_denied", "kino.room: wrong code");
+      }
+      if (same) kitRoom.joined.splice(kitRoom.joined.indexOf(same), 1);
+      const memberId = "mkit" + String(kitRoom.joined.length + 1).padStart(4, "0");
+      const handle = "jkit" + String(Date.now() % 1000).padStart(3, "0") + kitRoom.joined.length;
+      const session = {
+        handle, code, words, memberId, expiresAtMs: now() + RL.defaultTtlMin * 60_000, mailbox: roomMailbox(now), rate: roomRateWindow(now),
+        hostName: kitRoom.remote.hostName,
+        members: [{ memberId: R.hostId, name: kitRoom.remote.hostName }, { ...kitRoom.sims[0] }, { memberId, name: roomName(o.name, RL.maxMemberNameChars) }],
+      };
+      kitRoom.joined.push(session);
+      return { handle, memberId, host: { name: session.hostName }, expiresAtMs: session.expiresAtMs };
+    },
+    async send(payload, options) {
+      await null;
+      gate("send");
+      if (!plainObject(payload)) throw bad("the payload must be an object");
+      const text = JSON.stringify(payload);
+      const v = roomPayloadVerdict(text);
+      if (!v.ok) throw bad(v.why);
+      const o = opts(options);
+      if (o.to !== undefined && o.to !== null && typeof o.to !== "string") throw bad("to must be a member id");
+      const session = select(o);
+      const bytes = Buffer.byteLength(text, "utf8");
+      if (session === kitRoom.hosted) {
+        const targets = o.to === undefined || o.to === null || o.to === "all" ? session.members.filter((m) => m.memberId !== R.hostId) : session.members.filter((m) => m.memberId === o.to && m.memberId !== R.hostId);
+        if (!targets.length && o.to !== undefined && o.to !== null && o.to !== "all") throw bad("that member id is not in the room");
+        if (!session.rate(bytes)) throw kinoError("rate_limited", "kino.room.send: too many messages");
+        for (const t of targets) (kitRoom.received[t.memberId] ||= []).push(v.value);
+      } else {
+        if (o.to !== undefined && o.to !== null && o.to !== R.hostId && o.to !== "all") throw bad('a guest writes to the host or to "all"');
+        if (!session.rate(bytes)) throw kinoError("rate_limited", "kino.room.send: too many messages");
+        (kitRoom.received[R.hostId] ||= []).push(v.value);
+      }
+      return undefined;
+    },
+    async inbox(options) {
+      await null;
+      gate("inbox");
+      const o = opts(options);
+      const since = Number.isFinite(o.since) ? Math.max(0, Math.floor(o.since)) : 0;
+      const limit = intIn(o, "limit", 1, RL.maxInboxLimit, RL.defaultInboxLimit);
+      const { events, more } = select(o).mailbox.after(since, limit);
+      return { events, last: events.length ? events[events.length - 1].seq : since, more, reachable: true };
+    },
+    async members(options) {
+      await null;
+      gate("members");
+      return membersOf(select(opts(options)));
+    },
+    async close(options) {
+      await null;
+      gate("close");
+      const o = opts(options);
+      let session;
+      try { session = select(o); } catch { return undefined; }
+      if (session === kitRoom.hosted) kitRoom.hosted = null;
+      else kitRoom.joined.splice(kitRoom.joined.indexOf(session), 1);
+      return undefined;
+    },
+    async state() {
+      await null;
+      gate("state");
+      const h = kitRoom.hosted;
+      return {
+        role: h ? "host" : kitRoom.joined.length ? "guest" : "none",
+        joined: kitRoom.joined.map((j) => ({ handle: j.handle, memberId: j.memberId, host: { name: j.hostName }, expiresAtMs: j.expiresAtMs, reachable: true })),
+        hosted: h ? { code: h.code, words: h.words, expiresAtMs: h.expiresAtMs, members: h.members.length } : null,
+      };
+    },
+  };
+  return Object.freeze(api);
+}
+
+// --- kino.ai (apiVersion 14, capability "ai", Task 8r, contract.kinoAi) --------------------------------------------------------
+// The app's rules (PluginAiBridge), shared through test/ai-cases.json. The kit has no AI: [model] is a fake that answers canned
+// replies or errors, so a plugin's parsing, validation and fallbacks run offline with the app's refusals and limits.
+
+const AL = contract.kinoAi.limits;
+const AI_BAD = `kino.ai.ask takes { prompt: a non-empty string, system?: a string, json?: true or false, maxChars?: a whole number from 1 to ${AL.maxChars} }`;
+/** What the kit's fake answers when nobody set one (KINO_AI_REPLY, KINO_AI_ERROR or createKino's `ai`). */
+export const KIT_AI_MODEL = "kit/fake";
+export const KIT_AI_REPLY = "(kit) Kino's text AI is not in the kit: set KINO_AI_REPLY or pass ai to createKino";
+
+/** UTF-8 bytes, as the app counts a prompt (PluginJobs.utf8Bytes): a lone surrogate counts 3. */
+export const aiBytes = (s) => Buffer.byteLength(String(s), "utf8");
+
+/**
+ * The request [options] as the app reads it (prelude.js, PluginAiBridge.parse): `{ ok: true, request: { prompt, system, json,
+ * maxChars } }` or `{ ok: false, error, message }`.
+ */
+export function aiRequestVerdict(options) {
+  const fail = (error, message) => ({ ok: false, error, message });
+  if (!plainObject(options)) return fail("refused", AI_BAD);
+  const { prompt, system, json, maxChars } = options;
+  if (typeof prompt !== "string" || prompt.length === 0) return fail("refused", AI_BAD);
+  if (system !== undefined && system !== null && typeof system !== "string") return fail("refused", AI_BAD);
+  if (json !== undefined && json !== null && typeof json !== "boolean") return fail("refused", AI_BAD);
+  if (maxChars !== undefined && maxChars !== null && !(Number.isInteger(maxChars) && maxChars >= 1 && maxChars <= AL.maxChars)) return fail("refused", AI_BAD);
+  if (aiBytes(prompt) > AL.maxPromptBytes) return fail("too_large", `kino.ai.ask: the prompt is over ${AL.maxPromptBytes} bytes`);
+  if (typeof system === "string" && aiBytes(system) > AL.maxSystemBytes) return fail("too_large", `kino.ai.ask: the system text is over ${AL.maxSystemBytes} bytes`);
+  return { ok: true, request: { prompt, system: typeof system === "string" && system.length ? system : null, json: json === true, maxChars: maxChars ?? AL.defaultMaxChars } };
+}
+
+/** [text] cut to at most [maxChars] UTF-16 units, never inside a surrogate pair (PluginAi.cut). */
+export function aiCut(text, maxChars) {
+  if (text.length <= maxChars) return text;
+  const c = text.charCodeAt(maxChars - 1);
+  return text.slice(0, c >= 0xD800 && c <= 0xDBFF ? maxChars - 1 : maxChars);
+}
+
+/**
+ * kino.ai for [manifest] (createKino wires it), with the app's gates: the capability and [revoked] (KINO_AI_REVOKED=1), the origin
+ * ([origin]: aiOriginAllowed over the running export and its screen marks; a sync call never), the request, a job run's request
+ * budget ([origin]'s `takeRequest`, job.mjs), one in flight, perMinute and perDay, timeoutMs. [model] is the fake:
+ * `async ({ system, prompt, json, maxChars }) => string | { text, model? } | { error, message? } | null` (null: unavailable);
+ * without it, env KINO_AI_ERROR (an error code) or KINO_AI_REPLY (the reply), else [KIT_AI_REPLY] ("{}" when json is asked).
+ */
+/**
+ * Device-wide counters (PluginAiBridge's DEVICE_KEY count and its in-flight count). The kit runs one plugin, so each kitAiApi gets
+ * its own by default; pass the same [kitAiDevice] to several to see the device-wide caps (contract.kinoAi.limits.devicePerDay,
+ * deviceMaxInFlight) across plugins.
+ */
+export function kitAiDevice() { return { day: -1, used: 0, inFlight: 0 }; }
+
+export function kitAiApi(manifest, { model = undefined, revoked = false, origin = () => ({}), syncCall = false, env = process.env, now = Date.now, timeoutMs = AL.timeoutMs, device = kitAiDevice() } = {}) {
+  // A strict sliding window: at most perMinute asks in any 60 s (PluginAiBridge.takeWindow).
+  const window = [];
+  const takeWindow = () => {
+    const t = now();
+    while (window.length && t - window[0] >= 60_000) window.shift();
+    if (window.length >= AL.perMinute) return false;
+    window.push(t);
+    return true;
+  };
+  let day = -1, used = 0, inFlight = false;
+  const fail = (error, message) => Object.freeze({ ok: false, error, message });
+  const fake = typeof model === "function" ? model : async ({ json }) => {
+    if (env.KINO_AI_ERROR) return { error: env.KINO_AI_ERROR };
+    if (typeof env.KINO_AI_REPLY === "string") return env.KINO_AI_REPLY;
+    return json ? "{}" : KIT_AI_REPLY;
+  };
+  async function ask(options) {
+    await null;
+    const o = origin();
+    if (syncCall || !aiOriginAllowed(o)) return fail("refused", `kino.ai.ask only runs from the person's own action (${contract.kinoAi.fromFunctions.join(", ")}) or a scheduled job`);
+    if (!(manifest.capabilities || []).includes(contract.kinoAi.capability) || revoked || env.KINO_AI_REVOKED === "1") {
+      return fail("refused", 'kino.ai.ask needs the "ai" capability, approved and switched on by the person');
+    }
+    const v = aiRequestVerdict(options);
+    if (!v.ok) return fail(v.error, v.message);
+    if (inFlight) return fail("rate_limited", "kino.ai.ask: one ask at a time");
+    inFlight = true;
+    let deviceSlot = false;
+    try {
+      if (device.inFlight >= AL.deviceMaxInFlight) return fail("rate_limited", "kino.ai.ask: Kino's text AI is busy with other plugins, try again shortly");
+      device.inFlight++;
+      deviceSlot = true;
+      const today = Math.floor(now() / 86_400_000);
+      if (today !== day) { day = today; used = 0; }
+      if (today !== device.day) { device.day = today; device.used = 0; }
+      if (used >= AL.perDay) return fail("rate_limited", `kino.ai.ask: at most ${AL.perDay} asks a day`);
+      if (device.used >= AL.devicePerDay) return fail("rate_limited", `kino.ai.ask: this device's plugins already made ${AL.devicePerDay} asks today`);
+      // A job's request is taken only once the ask passes the limits above (PluginAiBridge, fix round 1 M2).
+      if (!takeWindow()) return fail("rate_limited", `kino.ai.ask: at most ${AL.perMinute} asks a minute`);
+      if (typeof o.takeRequest === "function" && !o.takeRequest()) return fail("rate_limited", `kino.ai.ask: a scheduled job makes at most ${contract.kinoJobs.limits.maxFetches} requests per run`);
+      used++;
+      device.used++;
+      const r = v.request;
+      const system = [r.system, r.json ? contract.kinoAi.jsonInstruction : null].filter((s) => s).join("\n\n") || null;
+      let timer;
+      const late = new Promise((resolveLate) => { timer = setTimeout(() => resolveLate({ late: true }), timeoutMs); });
+      let answer;
+      try {
+        answer = await Promise.race([Promise.resolve().then(() => fake({ system, prompt: r.prompt, json: r.json, maxChars: r.maxChars })), late]);
+      } catch {
+        answer = null;
+      } finally {
+        clearTimeout(timer);
+      }
+      if (answer && answer.late === true) return fail("timeout", `kino.ai.ask: no answer within ${timeoutMs / 1000} s`);
+      if (answer && typeof answer === "object" && typeof answer.error === "string") {
+        const code = contract.kinoAi.errorCodes.includes(answer.error) ? answer.error : "refused";
+        return fail(code, typeof answer.message === "string" ? answer.message : `kino.ai.ask: ${code} (the kit's fake)`);
+      }
+      const text = typeof answer === "string" ? answer : answer && typeof answer.text === "string" ? answer.text : null;
+      if (text === null) return fail("unavailable", "kino.ai.ask: Kino's text AI could not answer now");
+      const name = answer && typeof answer === "object" && typeof answer.model === "string" ? answer.model : KIT_AI_MODEL;
+      return Object.freeze({ ok: true, text: aiCut(text, r.maxChars), model: name });
+    } finally {
+      if (deviceSlot) device.inFlight--;
+      inFlight = false;
+    }
+  }
+  return Object.freeze({ ask });
 }
