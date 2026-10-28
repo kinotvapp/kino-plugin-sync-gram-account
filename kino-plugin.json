@@ -67,15 +67,6 @@
       ]
     },
     {
-      "key": "check_password",
-      "type": "action",
-      "label": "Confirmar la contraseña",
-      "labelEn": "Confirm the password",
-      "devices": [
-        "phone"
-      ]
-    },
-    {
       "key": "syncKey",
       "type": "password",
       "label": "Clave de sincronización",
@@ -93,17 +84,6 @@
       "labelEn": "Signed in",
       "hint": "Lo llena Iniciar sesión; no lo cambies",
       "hintEn": "Sign in fills it in; do not change it",
-      "devices": [
-        "phone"
-      ]
-    },
-    {
-      "key": "logout",
-      "type": "action",
-      "label": "Cerrar sesión",
-      "labelEn": "Sign out",
-      "confirm": "¿Cerrar la sesión de tu cuenta en este aparato?",
-      "confirmEn": "Sign your account out on this device?",
       "devices": [
         "phone"
       ]
@@ -138,6 +118,6 @@
   },
   "signature": {
     "authorKey": "82b87b938e0a95b142467c815a8823cb54310a13a828c3c4c77b1eda43294ae6",
-    "value": "4c14a2e430f2c064de3610b5cf7e5c9453f38570c6d0972c51a9d577b32c111d79862f7d8efb6d39ba3bd1546440445679ad8d723a85d5dd412cc9ab4cb9730a"
+    "value": "849c09aff9a8259add70c4f8972e5a139bea021bb9cbe52ba0167476a6ea24aaaba36b26581a2274e99010373ddb7a1a2dcf8da7a6825a62b9a85cdfe0df380f"
   }
 }

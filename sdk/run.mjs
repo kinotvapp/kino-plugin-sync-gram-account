@@ -895,8 +895,11 @@ function printScreenAnswer(fn, answer, context, manifest, writeConfig = () => {}
   }
   urlGoLine(checked.answer.go, checked.answer);
   if (checked.answer.config) {
-    for (const [k, v] of Object.entries(checked.answer.config)) stderr(`· Kino writes the setting ${k} = ${v === null ? "(emptied, back to its default)" : JSON.stringify(v)} (the same store and sync as its settings screen)`);
+    // Screen asks: a password written from a screen is never printed (Kino never logs it either), only that it is set.
+    const isPassword = (k) => (manifest.settings || []).some((s) => s.key === k && s.type === "password");
+    for (const [k, v] of Object.entries(checked.answer.config)) stderr(`· Kino writes the setting ${k} = ${v === null ? "(emptied, back to its default)" : isPassword(k) ? "(a password, never shown)" : JSON.stringify(v)} (the same store and sync as its settings screen)`);
     for (const line of writeConfig(checked.answer.config) || []) stderr(`· dropped: ${line}`);
+    checked.answer = { ...checked.answer, config: Object.fromEntries(Object.entries(checked.answer.config).map(([k, v]) => [k, v !== null && isPassword(k) ? "(a password, never shown)" : v])) };
   }
   // An answer with no ui operations prints without them, as one with none of the other fields (Task 7i-2).
   const { ui, ...rest } = checked.answer;

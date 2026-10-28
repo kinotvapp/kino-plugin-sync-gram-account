@@ -67,21 +67,24 @@ Instálalo en el celular y en la TV (Kino también puede copiarlo solo a tus apa
 1. Abre **Ajustes ▸ Ajustes de todos los perfiles ▸ Sincronización ▸ Proveedor**. Ahí aparece *Sync-Gram Cuenta*.
    Toca su botón **Configurar**: se abre la pantalla propia del plugin, un paso a la vez (Kino 0.9.74 o posterior).
 2. **Paso 1, los datos de tu app de Telegram:** toca **Abrir my.telegram.org** si todavía no los tienes (paso 1 de
-   esta guía), pega tu **api_id** y tu **api_hash** en los campos de la pantalla y toca **Guardar**. Una forma
-   equivocada se marca bajo el campo antes de guardar (el api_id es un número, el api_hash 32 letras y números).
+   esta guía), pega tu **api_id** y tu **api_hash** en los dos campos ocultos y toca **Guardar**. Una forma
+   equivocada se marca bajo el campo antes de guardar nada (el api_id es un número, el api_hash 32 letras y números).
    - La nota bajo el paso explica que este aparato guardará una sesión de toda tu cuenta de Telegram (mira
      [Privacidad y riesgos](#privacidad-y-riesgos)).
-3. **Paso 2, inicia sesión con tu número:** escribe **Tu número** con el código de país (por ejemplo
-   `+57 300 1234567`) y toca **Enviar código**. El botón sigue apagado, y el campo muestra el error, hasta que el
-   número tenga una forma válida.
+3. **Paso 2, tu número:** escríbelo con el código de país (por ejemplo `+57 300 1234567`) y toca **Enviar código**.
+   El botón sigue apagado, y el campo muestra el error, hasta que el número tenga una forma válida.
    - Casi siempre el código llega **como un mensaje de "Telegram" dentro de tu app de Telegram**, no como SMS.
    - El número se queda en este celular: nunca se sincroniza ni se envía a otro aparato.
-4. **Paso 3, escribe el código:** la pantalla ahora pide solo el código. Escríbelo y toca **Iniciar sesión**. El código
-   nunca se guarda. **Usar otro número** vuelve al paso 2.
-5. Si tu cuenta tiene **contraseña de dos pasos**, la pantalla lo dice: escríbela en el campo de contraseña de Kino,
-   toca **Guardar** y luego **Confirmar la contraseña**.
-6. La pantalla dice *Sesión iniciada*. Desde ahí muestra *Conectado con tu cuenta* y **Cerrar sesión**.
+4. **Paso 3, el código:** escríbelo en el campo oculto y toca **Iniciar sesión**. El código nunca se guarda. **Usar
+   otro número** vuelve al paso 2.
+5. **Paso 4, contraseña de dos pasos:** solo si tu cuenta la tiene. Escríbela en el campo oculto y toca **Confirmar**.
+   La contraseña queda cifrada en este aparato para que **Enviar configuración** la lleve una vez a la TV.
+6. **Paso 5, conectado:** la pantalla dice *Conectado con tu cuenta*. **Revisar el estado** pregunta otra vez a
+   Telegram y **Cerrar sesión** (con un segundo toque para confirmar) termina la sesión de este aparato y borra la
+   contraseña.
 
+Todo secreto (api_id, api_hash, el código, la contraseña) se escribe en un campo oculto; Kino no lo vuelve a mostrar,
+no lo registra y no lo guarda en la pantalla. Toca un paso terminado para volver a él (los datos de la app o el número).
 La pantalla se actualiza sola mientras está abierta; no hay nada que recargar.
 
 Solo ahora aparece **Enviar configuración** en la tarjeta del proveedor: lo que va a la TV es una configuración que ya
@@ -202,7 +205,7 @@ dañada. Después vuelve a pasar la configuración a tus otros aparatos con **En
 | *Telegram no aceptó tu api_id o tu api_hash* | Cópialos otra vez de my.telegram.org ▸ API development tools y toca **Guardar**. |
 | *Telegram pidió esperar …* / *vuelve a intentarlo en N minutos* (`FLOOD_WAIT`) | Telegram limita los inicios de sesión y las peticiones de cada cuenta. Espera el tiempo que dice; Kino sigue solo. |
 | *Demasiados intentos de inicio de sesión en este aparato* | Es el cupo del propio plugin. Espera el tiempo que dice. |
-| *La contraseña no es correcta* | Escribe otra vez la contraseña de dos pasos, toca **Guardar** y luego **Confirmar la contraseña**. |
+| *La contraseña no es correcta* | Escribe otra vez la contraseña de dos pasos en el paso 4 y toca **Confirmar**. |
 | La TV dice *La contraseña de dos pasos que recibiste no es correcta* | En el celular escríbela otra vez y vuelve a tocar **Enviar configuración**. |
 | La TV no muestra ningún QR | Revisa primero que el celular tenga la sesión iniciada (*Conectado con tu cuenta*) y vuelve a enviar la configuración. Si el intento automático se detuvo, la TV muestra **Iniciar sesión de Telegram con QR**: tócalo. |
 | La TV dice *Recibe la configuración desde otro aparato* | Haz el [paso 4](#4-en-la-tv-recibe-la-configuración-y-escanea-el-qr). |

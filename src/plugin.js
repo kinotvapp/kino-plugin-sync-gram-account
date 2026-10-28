@@ -7,7 +7,6 @@
 // This file is the entry: scripts/build.mjs bundles it with everything it imports into plugin/plugin.js, the one file
 // Kino loads. Edit src/ and rebuild; never edit plugin/plugin.js.
 import { accountPull, accountPush, accountStatus } from "./account/sync.js";
-import { confirmPassword, logout } from "./account/login.js";
 import { KEY_SHAPE } from "./account/key.js";
 import { t } from "./account/text.js";
 import { screen as drawScreen, screenEvent as handleScreenEvent } from "./account/screen.js";
@@ -33,13 +32,6 @@ export async function screenEvent(ctx = {}) {
 
 export async function syncStatus() {
   return accountStatus();
-}
-
-/** The two buttons Kino's own form still draws inside the screen: the 2FA password's confirm and Cerrar sesión. */
-export async function action(key) {
-  if (key === "check_password") return confirmPassword();
-  if (key === "logout") return logout();
-  return { message: t("qr.failed") };
 }
 
 export async function validateSettings(values) {

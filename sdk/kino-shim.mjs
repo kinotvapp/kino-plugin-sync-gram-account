@@ -2151,7 +2151,7 @@ export function createKino(manifest, { appVersion = "sdk", lang = "es-CO", devic
     /**
      * A screen answer's `config`, already checked (screen.mjs checkScreenAnswer with the manifest's settings): written into
      * the kit's settings, so a later `kino.config.get/all` of this run reads it, as the app's would. `null` empties a setting
-     * (its default again). Only the types a screen may write (never a password or a url); a list that would gain an address the
+     * (its default again). Only the types a screen may write (never a url; a password since the screen asks); a list that would gain an address the
      * kit's settings do not hold is not written, as in the app. Returns the app's line for each key it does not write.
      */
     writeConfig: (changes) => {

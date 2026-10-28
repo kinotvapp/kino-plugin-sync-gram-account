@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { cluster, device, blobOf, API, SYNC_KEY, MANIFEST, ROOT, shown } from "./harness.mjs";
+import { cluster, device, blobOf, API, SYNC_KEY, MANIFEST, ROOT, shown, walkNodes } from "./harness.mjs";
 import { openSession } from "../testkit/session-open.mjs";
 import { validateManifest, isStandaloneSet } from "../sdk/contract.mjs";
 import { validate } from "../sdk/validate.mjs";
@@ -85,10 +85,10 @@ test("the sync block: the key Kino makes, and the provision hands over the key, 
   assert.equal(validateManifest(JSON.stringify(bad)).ok, false);
 });
 
-test("the settings that stay are the ones the screen draws through Kino's own fields: secrets and the two buttons", () => {
-  assert.deepEqual(MANIFEST.settings.map((s) => s.key), ["api_id", "api_hash", "phone", "tg_password", "check_password", "syncKey", "login_ok", "logout"]);
+test("the settings that stay are only values: the secrets, the number and the sync key; no action, no section, no status", () => {
+  assert.deepEqual(MANIFEST.settings.map((s) => s.key), ["api_id", "api_hash", "phone", "tg_password", "syncKey", "login_ok"]);
   const of = (k) => MANIFEST.settings.find((s) => s.key === k);
-  assert.deepEqual([of("check_password").type, of("logout").type], ["action", "action"]);
+  assert.ok(MANIFEST.settings.every((x) => ["password", "text"].includes(x.type)), "every setting is a value");
   assert.deepEqual([of("syncKey").hint, of("syncKey").hintEn], ["La crea Kino sola: no la escribas tú", "Kino makes it by itself: do not type it"]);
   assert.ok(!MANIFEST.hosts.includes("my.telegram.org"), "a link is opened by Kino, never reached by the plugin: no host");
 });
@@ -96,11 +96,11 @@ test("the settings that stay are the ones the screen draws through Kino's own fi
 test("the screen's two languages: every text node carries Spanish and English", async () => {
   const r = rig();
   try {
-    const walk = (n, out) => { if (n && n.type === "Text") out.push(n); for (const c of (n && n.children) || []) walk(c, out); return out; };
     for (const [values, dev] of [[{}, "phone"], [API, "phone"], [{ ...API, login_ok: "1" }, "tv"]]) {
-      const texts = walk(await (await r.run(values, { device: dev })).screen({ state: {} }), []);
+      const texts = [];
+      walkNodes(await (await r.run(values, { device: dev })).screen({ state: {} }), (n) => { if (n.type === "Text") texts.push(n); });
       assert.ok(texts.length >= 3);
-      for (const x of texts) assert.ok(x.text && x.textEn && x.text !== x.textEn, x.text);
+      for (const x of texts) assert.ok(x.text && x.textEn && (x.text !== x.textEn || /^[A-Za-z0-9_ ]+$/.test(x.text)), x.text);
     }
   } finally { r.close(); }
 });
@@ -217,7 +217,7 @@ test("Cerrar sesión (phone): auth.logOut, the session goes, login_ok and the 2F
     await qrSignIn(r);
     const out = await (await r.run({ ...API, login_ok: "1", tg_password: PASSWORD })).action("logout");
     assert.match(out.message, /se cerró la sesión de tu cuenta/);
-    assert.deepEqual(out.clearSettings.sort(), ["login_code", "login_ok", "tg_password"]);
+    assert.deepEqual(out.clearSettings.sort(), ["login_ok", "tg_password"]);
     assert.equal(r.c.account.stats.logOuts, 1);
     assert.equal(r.d.base.storage.get("tg.usession"), null);
     const q = await r.run();

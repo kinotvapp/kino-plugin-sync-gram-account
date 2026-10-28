@@ -6,7 +6,7 @@
 // expired or failed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cluster, device, API, blobOf, shown } from "./harness.mjs";
+import { cluster, device, API, blobOf, shown, walkNodes } from "./harness.mjs";
 
 const PASSWORD = "contraseña-de-prueba 2FA";
 const RECEIVED = Object.freeze({ ...API, login_ok: "1" }); // what "Recibir configuración" leaves on the TV
@@ -38,7 +38,7 @@ test("with the received configuration and no session the TV page starts the QR l
     assert.match(done.status, /sesión iniciada|Conectado/);
     const after = await (await r.tv()).settingsStatus();
     assert.match(after.status, /Conectado con tu cuenta/);
-    assert.deepEqual([after.retry, after.view.qr, after.view.buttons], [false, [], []], "connected: only the status");
+    assert.deepEqual([after.retry, after.view.qr, after.view.buttons], [false, [], ["Cerrar sesión"]], "connected: the status and Cerrar sesión");
     const en = await (await r.tv(RECEIVED, { lang: "en" })).settingsStatus();
     assert.match(en.status, /Connected to your account/);
   } finally { r.close(); }
@@ -145,10 +145,12 @@ test("2FA: the received password is used by itself, once; a wrong one is not tri
     assert.equal(r.c.account.stats.checkPassword, 2);
     const hay = [r.d.storageDump(), r.d.logs.join("\n"), JSON.stringify([wrong, right])].join("\n");
     assert.ok(!hay.includes(PASSWORD) && !hay.includes("mala"));
-    // A screen cannot clear a password setting: the TV keeps it, sealed, device-only, and Cerrar sesión (Kino's own button
-    // on the signed-in screen) clears it.
+    // Once the TV is signed in, its next timer tick clears the password it used (a screen may clear a password setting),
+    // and Cerrar sesión clears it and login_ok too.
     const p = await r.tv({ ...RECEIVED, tg_password: PASSWORD });
-    assert.deepEqual(shown(await p.screen({ state: {} })).settings, ["logout"]);
+    const tick = await p.screenEvent({ name: "tick", state: {}, device: "tv" });
+    assert.deepEqual(tick.config, { tg_password: null });
+    assert.ok(shown(await p.screen({ state: {} })).buttons.includes("Cerrar sesión"));
     const out = await p.action("logout");
     assert.ok(out.clearSettings.includes("tg_password") && out.clearSettings.includes("login_ok"));
   } finally { r.close(); }
@@ -163,5 +165,24 @@ test("without a received password the TV asks for it from the phone, and the but
     r.tick(11000);
     const asks = await (await r.tv()).settingsStatus();
     assert.match(asks.status, /envíala desde tu celular con Enviar configuración/);
+  } finally { r.close(); }
+});
+
+test("the QR carries Kino's countdown and asks for a new code before it expires; the phone can go back to a done step", async () => {
+  const r = rig();
+  try {
+    const p = await r.tv();
+    await p.settingsStatus(); // the automatic login starts and the QR exists
+    const tick = await p.screenEvent({ name: "tick", state: {}, device: "tv" });
+    const tree = await p.screen({ state: tick.state, device: "tv" });
+    let qr = null;
+    walkNodes(tree, (n) => { if (n.type === "QrImage") qr = n; });
+    assert.deepEqual([qr.expiresInMs, qr.renewBeforeMs, qr.onExpire], [30000, 6000, "renew"]);
+    const renew = await p.screenEvent({ name: "renew", value: { phase: "renew", remainingMs: 6000 }, state: tick.state, device: "tv" });
+    assert.match(renew.state.qr, /^tg:\/\/login\?token=/);
+    const phone = await r.d.runtime(API, { device: "phone" });
+    let steps = null;
+    walkNodes(await phone.screen({ state: {} }), (n) => { if (n.type === "steps") steps = n; });
+    assert.equal(steps.onStepTap, "go_back");
   } finally { r.close(); }
 });

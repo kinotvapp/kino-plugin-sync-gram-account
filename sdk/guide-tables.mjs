@@ -30,7 +30,7 @@ const WIDGET_TEXT = {
   image: "an https picture on a public host (`url`, `alt`, `fallback`)", icon: "one of Kino's icons (`name`)", badge: "a small label (`text`)",
   progress: "a progress bar (`value`, `labelText`)", loading: "Kino's spinner (`text`)",
   list: "a lazy list of `items` (nodes), `empty` when there are none, load more", button: "a button (`labelText`, `icon`, `onPressed`, `confirm`, `submit`)",
-  textInput: "a text field (`kind`, `maxLength`, `value`, `onSubmitted`; a `trailingIcon` inside it with `trailingLabel` and `onTrailingTap`)", textArea: "a text field of several lines (`multiline: true` or `maxLines` above 1)",
+  textInput: "a text field (`kind`, `maxLength`, `value`, `onSubmitted`; a `trailingIcon` inside it with `trailingLabel` and `onTrailingTap`; `obscureText` masks it)", textArea: "a text field of several lines (`multiline: true` or `maxLines` above 1)",
   dropdown: "a choice among `options`", toggle: "an on/off switch", checkbox: "a check box", radioGroup: "one choice among `options`",
   slider: "a number between `min` and `max` (`step`)", chips: "one or several (`multiple`) choices among `options`",
   tabs: "a row of tabs (`tabs`, `value`, `onChanged`); its value is NOT in `state.inputs`", emptyState: "Kino's empty state (`title`, `text`, `icon`)",
@@ -38,15 +38,26 @@ const WIDGET_TEXT = {
   titleRail: "a Home row: `title`, `items`, `ref` for its \"Ver más\"", titleGrid: "Home cards in a grid (`items`)",
   heroCard: "a section's banner: `title`, `text`, `image`, at most " + L.maxHeroButtons + " `buttons`",
   popup: "a pop-up declared in the tree (`key`, `kind`), opened with a `ui` operation", form: "fields with one submit, checked by Kino before your code (`onSubmitted`)",
-  settings: "Kino's own settings form for your plugin (`keys`)", banner: "a line of news in a role's colour (`role`, `title`, `text`, `action`, `dismissible`)",
+  settings: "Kino's own settings form for your plugin (`keys`, `onSaved`)", banner: "a line of news in a role's colour (`role`, `title`, `text`, `action`, `dismissible`)",
   accordion: "sections that open and close (`key`, `items`, `multiple`)", skeleton: "a placeholder while something loads",
-  qr: "a QR code Kino draws on the device (`value`)", stepper: "a number drawn `[ − ] value [ + ]` (`min`, `max`, `step`, `decimals`, `editable`)",
+  qr: "a QR code Kino draws on the device (`value`; `expiresInMs` or `expiresAt` with Kino's countdown, `onExpire`, `renewBeforeMs`)", stepper: "a number drawn `[ − ] value [ + ]` (`min`, `max`, `step`, `decimals`, `editable`)",
   table: "a table of `TableRow`s holding `TableCell`s (`text` or `children`, `colSpan`, `crossAxisAlignment`)",
+  fab: "Kino's floating button over the screen's bottom (`icon`, `labelText`, `onPressed`), one per screen",
+  listTile: "one row of a list: `leading`, `title`, `subtitle`, `trailing`, one press",
+  avatar: "a circle with a picture, initials or an icon (`image`, `text`, `icon`, `backgroundColor`)",
+  scaffold: "a screen's root with an `appBar`, a `body`, a `floatingActionButton` and a `bottomNavigationBar` (drawn in layout fill)",
+  appBar: "a Scaffold's top bar: `title`, `leading`, up to four `actions`, a `bottom` TabBar",
+  navigationBar: "a Scaffold's bottom bar of 2 to 5 `items` (`value`, `onChanged`)",
+  pageView: "pages swiped across with Kino's dots (`initialPage`, `onPageChanged`, `autoPlayMs`); `viewportFraction` < 1 is a carousel",
+  steps: "a setup flow in Kino's look: `items` done, current (open, its `children`) or pending; `onStepTap` lets a done step be pressed",
 };
 /** Properties a widget takes besides the ones contract.json lists in layoutProps (the d.ts has the rest). */
 const WIDGET_PROPS = {
   list: ["onEndReached", "loadingMore", "done", S.listHints.field], titleRail: ["onEndReached", "loadingMore", "done"], titleGrid: ["onEndReached", "loadingMore", "done"],
   popup: ["onClose", "buttons", "items", S.declaredPopups.anchor.field], text: [S.textTime.field, S.textTime.formatField],
+  pageView: ["initialPage", "onPageChanged", "autoPlayMs"], avatar: ["backgroundColor"], listTile: ["leading", "trailing", "subtitle"],
+  // Screen asks.
+  textInput: ["obscureText"], settings: [S.screenAsks.onSavedField], qr: S.screenAsks.qr.fields, steps: ["items", S.screenAsks.steps.onStepTapField],
 };
 const GO_TEXT = {
   title: "this plugin's title page (`ref`, `kind`; `id`, `title` and `adult` for a title that is not on the canvas)",
@@ -153,6 +164,16 @@ export const TABLES = {
       span: `1 to ${S.limits.gridColumns} or \`"auto"\`, in a \`Row\` with \`wrap: true\``,
       offset: `0 to ${S.limits.gridColumns - 1}, in a \`Row\` with \`wrap: true\``,
       maxWidthFraction: `${S.maxWidthFraction.min} to ${S.maxWidthFraction.max} in steps of ${S.maxWidthFraction.step}: at most that share of the parent's width (exactly, with \`fill\`)`,
+      // Task 17.
+      alignSelf: "`start`, `center`, `end`, `stretch`: this child across its `Row` or `Column` ([ui.md](ui.md#box-props))",
+      textAlign: `${S.boxProps.textAligns.map((x) => `\`${x}\``).join(", ")}: a text's paragraph`,
+      border: `\`{ width?, color? }\` on a box: 0 to ${S.boxProps.border.maxWidth} dp, a colour role`,
+      elevation: `0 to ${S.boxProps.maxElevation} on a \`Card\` or a \`Stack\`: Kino's shadow`,
+      background: "a colour role: a box's fill",
+      minWidth: S.sizeScale.join(", "), maxWidth: S.sizeScale.join(", "), maxHeight: S.sizeScale.join(", "),
+      positioned: "`{ top?, left?, right?, bottom?, width?, height? }` on a `Stack` child, dp or `\"25%\"` ([ui.md](ui.md#positioned))",
+      opacity: "0 to 1 ([ui.md](ui.md#animate))",
+      animate: "`{ duration?, curve? }`: changes glide ([ui.md](ui.md#animate))",
     }[p] || "see `kino.d.ts`";
     const name = canon(p);
     return [`\`${name}\``, name === p ? "" : `\`${p}\``, values];

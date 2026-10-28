@@ -8,6 +8,22 @@ import { contract, imageVerdict, javaDouble, qrUrl, screenGoOf, skipOf, titleByI
 import { resolvePalette } from "./palette.mjs";
 import { shownSentence } from "./kino-shim.mjs";
 
+/**
+ * ScreenLimits.colorHint (screen asks, owner's #8): what a "is not a color role" line adds so the author sees what to write: a
+ * role in another case, or a common colour word (contract colorHints; `success` is a banner's and a toast's role) names its
+ * closest role. Empty when there is none.
+ */
+export function colorHint(raw) {
+  if (typeof raw !== "string") return "";
+  // Kotlin's trim, as the app's line reads it.
+  const w = raw.replace(/^[\s\u001C-\u001F]+|[\s\u001C-\u001F]+$/gu, "");
+  const lower = w.toLowerCase();
+  const role = contract.manifest.screen.colorRoles.find((r) => r.toLowerCase() === lower) ?? contract.manifest.screen.colorHints[lower];
+  if (!role) return "";
+  const banner = contract.manifest.screen.roles.includes(lower) && !contract.manifest.screen.colorRoles.includes(lower) ? `"${lower}" is a banner and toast role; ` : "";
+  return ` (${banner}the closest color role is "${role}")`;
+}
+
 // ---------- limits (PluginPanelOutput, PluginLayout, PanelPlayerRules, PluginSettings, PanelIconFile) ----------
 
 export const LAYOUT = contract.output.layout;
@@ -295,7 +311,7 @@ export function badgeOf(raw, lang, where, log) {
   const c = raw.color;
   if (c !== undefined && c !== null) {
     if (typeof c === "string" && contract.manifest.screen.colorRoles.includes(c)) color = c;
-    else log(`${where} badge color ${fmtValue(c)} is not a color role, the default used`);
+    else log(`${where} badge color ${fmtValue(c)} is not a color role${colorHint(c)}, the default used`);
   }
   return { text: cut, color };
 }

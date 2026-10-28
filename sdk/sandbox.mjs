@@ -168,7 +168,10 @@ export function toScript(source) {
       const close = text.indexOf("}", at);
       if (close === -1) throw new SyntaxError("export { … } is not closed");
       let end = close + 1;
-      if (/^\s*from\b/.test(text.slice(end))) throw new Error(importRefusal("(export … from)"));
+      if (/^\s*from\b/.test(text.slice(end))) {
+        const spec = /["'`]([^"'`]+)["'`]/.exec(source.slice(end, end + 200));
+        throw new Error(`${importRefusal(spec ? spec[1] : "(export … from)")}; \`export { … } from\` re-exports a second file, so bundle that file into the entry first (the kit's esbuild recipe), then export the names from the bundle`);
+      }
       const list = text.slice(at + 1, close);
       for (const part of list.split(",")) {
         const pm = /^\s*([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*$/.exec(part);

@@ -340,21 +340,21 @@ export function loginStage() {
  * The check_password action (and the TV's qr_login password step). On the TV the field is always cleared. On the phone
  * it is cleared only when the check failed: after a success it stays (sealed, device-only) for Enviar configuración.
  */
-export async function confirmPassword() {
+export async function confirmPassword({ password: typedPassword } = {}) {
   const tv = isTv();
   const clear = (failedCheck) => (tv || failedCheck ? { clearSettings: TV_CLEAR } : {});
   const c = credentials();
   if (!c.complete) return { message: t(tv ? "status.api_missing.tv" : "status.api_missing.phone"), ...clear(false) };
   const st = mine(QR_KEY, c);
   if (!st || st.stage !== "password") return { message: t(hasSession(c) ? "qr.already" : "pw.notNeeded"), ...clear(false) };
-  const typed = kino.config.get("tg_password");
+  const typed = typedPassword !== undefined ? typedPassword : kino.config.get("tg_password");
   if (typeof typed !== "string" || !typed) return { message: t("pw.empty"), ...clear(false) };
   const now = clock();
   try {
     const live = await connectForLogin({ deadline: now + ACTION_MS });
     await live.client.checkPassword(typed, { deadline: now + ACTION_MS });
     done();
-    return tv ? { message: t("qr.done"), ...clear(false) } : { message: t("phone.done"), setSettings: { login_ok: "1" } };
+    return tv ? { message: t("qr.done"), ...clear(false) } : { message: t("phone.done"), setSettings: { login_ok: "1" }, keepPassword: typed };
   } catch (e) {
     const code = errCode(e);
     logStop("password check", e);

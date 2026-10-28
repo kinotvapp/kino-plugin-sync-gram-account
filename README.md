@@ -66,20 +66,23 @@ Install it on the phone and on the TV (Kino can also copy it to your paired devi
 1. Open **Settings ▸ Settings for all profiles ▸ Sync ▸ Provider**. *Sync-Gram Cuenta* is listed there. Tap its
    **Set up** button: the plugin's own screen opens, one step at a time (Kino 0.9.74 or later).
 2. **Step 1, your Telegram app's details:** tap **Open my.telegram.org** if you still need them (step 1 of this
-   guide), then paste your **api_id** and **api_hash** in the fields on the screen and tap **Save**. A wrong shape
-   is flagged under the field before you save (the api_id is a number, the api_hash 32 letters and digits).
+   guide), then paste your **api_id** and **api_hash** into the two masked fields and tap **Save**. A wrong shape is
+   flagged under the field before anything is saved (the api_id is a number, the api_hash 32 letters and digits).
    - The note under the step explains that this device will hold a session of your whole Telegram account (see
      [Privacy and risks](#privacy-and-risks)).
-3. **Step 2, sign in with your number:** type **Your number** with the country code (for example `+57 300 1234567`) and
-   tap **Send the code**. The button stays off, and the field shows the error, until the number has a valid shape.
+3. **Step 2, your number:** type it with the country code (for example `+57 300 1234567`) and tap **Send the code**.
+   The button stays off, and the field shows the error, until the number has a valid shape.
    - The code usually arrives **as a message from "Telegram" inside your Telegram app**, not as an SMS.
    - The number stays on this phone: it is never synced and never sent to another device.
-4. **Step 3, type the code:** the screen now asks only for the code. Type it and tap **Sign in**. The code is never
-   stored. **Use another number** goes back to step 2.
-5. If your account has a **two-step password**, the screen says so: type it in Kino's password field, tap **Save**,
-   then **Confirm the password**.
-6. The screen says *Signed in*. From now on it shows *Connected to your account* and **Sign out**.
+4. **Step 3, the code:** type it in the masked field and tap **Sign in**. The code is never stored. **Use another
+   number** goes back to step 2.
+5. **Step 4, two-step password:** only if your account has one. Type it in the masked field and tap **Confirm**.
+   The password is kept sealed on this device so **Send settings** can carry it once to the TV.
+6. **Step 5, connected:** the screen says *Connected to your account*. **Check the status** asks Telegram again and
+   **Sign out** (with a second tap to confirm) ends this device's session and clears the password.
 
+Every secret (api_id, api_hash, the code, the password) is typed in a masked field; Kino never shows it again, never
+logs it and never keeps it in the screen. Tap a finished step to go back to it (the api details or the number).
 The screen refreshes itself while it is open; there is nothing to reload.
 
 Only now does **Send settings** appear on the provider's card: what goes to the TV is a setup that is known to work.
@@ -193,7 +196,7 @@ again with **Send settings**.
 | *Telegram did not accept your api_id or api_hash* | Copy them again from my.telegram.org ▸ API development tools, then **Save**. |
 | *Telegram asked to wait …* / *try again in N minutes* (`FLOOD_WAIT`) | Telegram limits sign-ins and requests per account. Wait the time shown; Kino goes on by itself. |
 | *Too many sign-in attempts on this device* | The plugin's own budget. Wait the time shown. |
-| *The password is not right* | Type the two-step password again, **Save**, then **Confirm the password**. |
+| *The password is not right* | Type the two-step password again in step 4 and tap **Confirm**. |
 | The TV says *The two-step password you received is not right* | On the phone type it again and tap **Send settings** again. |
 | The TV shows no QR | Make sure the phone is signed in first (*Connected to your account*) and send the settings again. If the automatic attempt stopped, the TV shows **Sign in to Telegram with QR**: press it. |
 | The TV says *Get the setup from another device* | Do [step 4](#4-on-the-tv-receive-the-setup-and-scan-the-qr). |

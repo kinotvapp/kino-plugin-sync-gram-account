@@ -4,7 +4,7 @@
 // code and the 2FA password never reach storage, logs, status lines or errors.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cluster, device, API, SYNC_KEY, shown } from "./harness.mjs";
+import { cluster, device, API, SYNC_KEY, shown, walkNodes } from "./harness.mjs";
 import { openSession } from "../testkit/session-open.mjs";
 import { checkScreenTree } from "../sdk/screen.mjs";
 
@@ -84,11 +84,11 @@ test("2FA: the password step, a wrong password clears it, the right one signs in
     r.c.account.setPassword(PASSWORD);
     await r.act("send_code");
     const needs = await r.act("sign_in", { login_code: r.c.saved.lastCode });
-    assert.match(needs.message, /contraseña de dos pasos: escríbela arriba, toca Guardar y luego Confirmar la contraseña/);
+    assert.match(needs.message, /contraseña de dos pasos: escríbela en el último paso y toca Confirmar/);
     assert.equal(needs.setSettings, undefined);
     const wrong = await r.act("check_password", { tg_password: "mala" });
     assert.match(wrong.message, /no es correcta/);
-    assert.deepEqual(wrong.clearSettings, ["tg_password"], "a password that failed is cleared");
+    assert.equal(wrong.clearSettings, undefined, "a wrong password writes nothing: the masked field empties by itself");
     const right = await r.act("check_password", { tg_password: PASSWORD });
     assert.match(right.message, /sesión iniciada/);
     assert.deepEqual(right.setSettings, { login_ok: "1" });
@@ -149,28 +149,64 @@ test("Enviar código and Iniciar sesión are budgeted with the QR logins (5 an h
   } finally { r.close(); }
 });
 
-test("the phone's screen by stage: number first, then the code, then the password, then just signed in; never the QR", async () => {
+test("the phone's steps by stage: api details, number, code, password, connected; never the QR", async () => {
   const r = rig();
   try {
-    const view = async () => {
-      const tree = await (await r.run()).screen({ state: {} });
+    const view = async (values) => {
+      const tree = await (await r.run(values)).screen({ state: {} });
       assert.deepEqual(checkScreenTree(tree, "es", undefined, { settings: undefined }).dropped, [], "Kino keeps every node of the tree");
       return shown(tree);
     };
-    let v = await view();
-    assert.deepEqual([v.fields, v.buttons], [["phone"], ["Enviar código"]], "signed out: the number and Enviar código");
+    const states = (v) => v.steps.map(([, st]) => st).join(",");
+    let v = await view({});
+    assert.equal(states(v), "current,pending,pending,pending,pending", "no api details yet: step 1");
+    assert.deepEqual([v.forms, v.fields], [["apiForm"], ["api_id", "api_hash"]]);
+    v = await view(API);
+    assert.equal(states(v), "done,current,pending,pending,pending");
+    assert.deepEqual([v.forms, v.fields, v.buttons], [["numberForm"], ["phone"], ["Enviar código"]]);
     assert.deepEqual(v.qr, []);
     r.c.account.setPassword(PASSWORD);
     await r.act("send_code");
     v = await view();
-    assert.deepEqual([v.fields, v.buttons], [["code"], ["Iniciar sesión", "Usar otro número"]], "code stage: the code, Iniciar sesión, another number");
+    assert.equal(states(v), "done,done,current,pending,pending");
+    assert.deepEqual([v.forms, v.fields, v.buttons], [["codeForm"], ["code"], ["Iniciar sesión", "Usar otro número"]]);
     await r.act("sign_in", { login_code: r.c.saved.lastCode });
     v = await view();
-    assert.deepEqual([v.fields, v.buttons, v.settings], [[], [], ["tg_password", "check_password"]], "password stage: Kino's own secret field and its button");
+    assert.equal(states(v), "done,done,done,current,pending");
+    assert.deepEqual([v.forms, v.fields], [["pwForm"], ["password"]]);
     await r.act("check_password", { tg_password: PASSWORD });
     v = await view();
-    assert.deepEqual([v.fields, v.settings], [[], ["logout"]], "signed in: just Cerrar sesión");
-    assert.deepEqual(v.qr, []);
+    assert.equal(states(v), "done,done,done,done,current");
+    assert.deepEqual([v.fields, v.buttons], [[], ["Revisar el estado", "Cerrar sesión"]]);
+  } finally { r.close(); }
+});
+
+test("every secret is a masked field: the api details, the code and the password never show as typed", async () => {
+  const r = rig();
+  try {
+    const masked = [];
+    for (const values of [{}, API]) {
+      walkNodes(await (await r.run(values)).screen({ state: {} }), (n) => { if (n.type === "TextField") masked.push([n.key, n.obscureText === true]); });
+    }
+    r.c.account.setPassword(PASSWORD);
+    await r.act("send_code");
+    walkNodes(await (await r.run()).screen({ state: {} }), (n) => { if (n.type === "TextField") masked.push([n.key, n.obscureText === true]); });
+    await r.act("sign_in", { login_code: r.c.saved.lastCode });
+    walkNodes(await (await r.run()).screen({ state: {} }), (n) => { if (n.type === "TextField") masked.push([n.key, n.obscureText === true]); });
+    assert.deepEqual(masked, [["api_id", true], ["api_hash", true], ["phone", false], ["code", true], ["password", true]]);
+  } finally { r.close(); }
+});
+
+test("save_api checks the shape again and writes both values through config; a bad one writes nothing", async () => {
+  const r = rig();
+  try {
+    const p = await r.run({});
+    const bad = await p.screenEvent({ name: "save_api", value: { api_id: "abc", api_hash: "short" }, state: {}, device: "phone" });
+    assert.equal(bad.config, undefined);
+    assert.match(bad.state.msg, /api_id es un número/);
+    const good = await p.screenEvent({ name: "save_api", value: { api_id: API.api_id, api_hash: API.api_hash }, state: {}, device: "phone" });
+    assert.deepEqual(good.config, { api_id: API.api_id, api_hash: API.api_hash });
+    assert.ok(!JSON.stringify(good.state).includes(API.api_hash), "the secret never goes into the screen's state");
   } finally { r.close(); }
 });
 
@@ -219,5 +255,21 @@ test("the key is untouched by the phone sign-in: no action sets or clears syncKe
       assert.ok(!(a.clearSettings || []).includes("syncKey"));
     }
     assert.ok(!hay(r, ...answers).includes(SYNC_KEY));
+  } finally { r.close(); }
+});
+
+test("the right 2FA password is written through the answer's config (kept for the TV), the wrong one is not, and neither enters the screen's state", async () => {
+  const r = rig();
+  try {
+    r.c.account.setPassword(PASSWORD);
+    await r.act("send_code");
+    await r.act("sign_in", { login_code: r.c.saved.lastCode });
+    const p = await r.run();
+    const wrong = await p.screenEvent({ name: "check_password", value: { password: "mala" }, state: {}, device: "phone" });
+    assert.equal(wrong.config?.tg_password, undefined);
+    const right = await p.screenEvent({ name: "check_password", value: { password: PASSWORD }, state: {}, device: "phone" });
+    assert.deepEqual(right.config, { login_ok: "1", tg_password: PASSWORD });
+    for (const e of [wrong, right]) assert.ok(!JSON.stringify(e.state).includes(PASSWORD) && !JSON.stringify(e.state).includes("mala"));
+    assert.ok(!r.d.storageDump().includes(PASSWORD) && !r.d.logs.join(String.fromCharCode(10)).includes(PASSWORD));
   } finally { r.close(); }
 });
