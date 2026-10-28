@@ -174,12 +174,18 @@ function tvSteps(stage, state) {
 
 export async function screen({ state = {} } = {}) {
   const stage = loginStage();
+  // The page scrolls: on a TV a tall step (the QR, its countdown and a button) would otherwise end under the screen's edge,
+  // out of the remote's reach.
   return {
-    type: "Column",
-    padding: { compact: 16, expanded: 32 },
-    gap: 12,
+    type: "SingleChildScrollView",
+    key: "page",
     every: { ms: TICK_MS, event: "tick" },
-    children: [text("scr.title", "h1"), text("scr.sub"), isTv() ? tvSteps(stage, state) : phoneSteps(stage, state)],
+    children: [{
+      type: "Column",
+      padding: { compact: 16, expanded: 32 },
+      gap: 12,
+      children: [text("scr.title", "h1"), text("scr.sub"), isTv() ? tvSteps(stage, state) : phoneSteps(stage, state)],
+    }],
   };
 }
 

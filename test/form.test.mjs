@@ -41,7 +41,7 @@ async function qrSignIn(r, values = API) {
 }
 
 test("the manifest: a standalone sync provider with a screen, socket and storageLarge, accepted by the kit's checks", async () => {
-  assert.deepEqual([MANIFEST.id, MANIFEST.name, MANIFEST.version, MANIFEST.apiVersion], ["sync-gram-account", "Sync-Gram Cuenta", "1.2.0", 14]);
+  assert.deepEqual([MANIFEST.id, MANIFEST.name, MANIFEST.version, MANIFEST.apiVersion], ["sync-gram-account", "Sync-Gram Cuenta", "1.2.1", 14]);
   assert.deepEqual(MANIFEST.capabilities, ["syncProvider", "socket", "storageLarge", "screen"]);
   assert.ok(isStandaloneSet(MANIFEST.capabilities));
   assert.deepEqual(MANIFEST.hosts, ["pluto.web.telegram.org", "venus.web.telegram.org", "aurora.web.telegram.org", "vesta.web.telegram.org", "flora.web.telegram.org"]);

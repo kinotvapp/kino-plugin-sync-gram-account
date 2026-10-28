@@ -1,7 +1,7 @@
 {
   "id": "sync-gram-account",
   "name": "Sync-Gram Cuenta",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "apiVersion": 14,
   "entry": "plugin.js",
   "description": "Sincroniza tus aparatos de Kino a través de tu propia cuenta de Telegram, sin bot: la copia queda fijada en tus Mensajes guardados. En el celular entras con tu número y un código; la TV recibe la configuración y muestra un código QR. No oficial: sin relación con Telegram. (Unofficial: not affiliated with Telegram.)",
@@ -118,6 +118,6 @@
   },
   "signature": {
     "authorKey": "82b87b938e0a95b142467c815a8823cb54310a13a828c3c4c77b1eda43294ae6",
-    "value": "849c09aff9a8259add70c4f8972e5a139bea021bb9cbe52ba0167476a6ea24aaaba36b26581a2274e99010373ddb7a1a2dcf8da7a6825a62b9a85cdfe0df380f"
+    "value": "9faa9ff7d74a33f4566ae3a0254b04746b80d79c5e36605495cb5c9caf9e7f30f2d88c595b6ea9eb6f53b8a5a89c07b073439f99056423d08d3ac3730e19400c"
   }
 }
