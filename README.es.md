@@ -68,11 +68,11 @@ Instálalo en el celular y en la TV (Kino también puede copiarlo solo a tus apa
    Toca su botón **Configurar**: se abre la pantalla propia del plugin, un paso a la vez (Kino 0.9.74 o posterior).
 2. **Paso 1, los datos de tu app de Telegram:** toca **Abrir my.telegram.org** si todavía no los tienes (paso 1 de
    esta guía), pega tu **api_id** y tu **api_hash** en los dos campos ocultos y toca **Guardar**. Una forma
-   equivocada se marca bajo el campo antes de guardar nada (el api_id es un número, el api_hash 32 letras y números).
+   equivocada se marca bajo el campo al tocar **Guardar**, y no se guarda nada (el api_id es un número, el api_hash 32 letras y números).
    - La nota bajo el paso explica que este aparato guardará una sesión de toda tu cuenta de Telegram (mira
      [Privacidad y riesgos](#privacidad-y-riesgos)).
 3. **Paso 2, tu número:** escríbelo con el código de país (por ejemplo `+57 300 1234567`) y toca **Enviar código**.
-   El botón sigue apagado, y el campo muestra el error, hasta que el número tenga una forma válida.
+   El botón está apagado mientras el campo está vacío; con una forma equivocada, al tocarlo el campo muestra el error y no se envía nada.
    - Casi siempre el código llega **como un mensaje de "Telegram" dentro de tu app de Telegram**, no como SMS.
    - El número se queda en este celular: nunca se sincroniza ni se envía a otro aparato.
 4. **Paso 3, el código:** escríbelo en el campo oculto y toca **Iniciar sesión**. El código nunca se guarda. **Usar

@@ -67,11 +67,11 @@ Install it on the phone and on the TV (Kino can also copy it to your paired devi
    **Set up** button: the plugin's own screen opens, one step at a time (Kino 0.9.74 or later).
 2. **Step 1, your Telegram app's details:** tap **Open my.telegram.org** if you still need them (step 1 of this
    guide), then paste your **api_id** and **api_hash** into the two masked fields and tap **Save**. A wrong shape is
-   flagged under the field before anything is saved (the api_id is a number, the api_hash 32 letters and digits).
+   flagged under the field when you tap **Save**, and nothing is saved (the api_id is a number, the api_hash 32 letters and digits).
    - The note under the step explains that this device will hold a session of your whole Telegram account (see
      [Privacy and risks](#privacy-and-risks)).
 3. **Step 2, your number:** type it with the country code (for example `+57 300 1234567`) and tap **Send the code**.
-   The button stays off, and the field shows the error, until the number has a valid shape.
+   The button is off while the field is empty; with a wrong shape, tapping it shows the error under the field and sends nothing.
    - The code usually arrives **as a message from "Telegram" inside your Telegram app**, not as an SMS.
    - The number stays on this phone: it is never synced and never sent to another device.
 4. **Step 3, the code:** type it in the masked field and tap **Sign in**. The code is never stored. **Use another
