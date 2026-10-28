@@ -65,21 +65,24 @@ Instálalo en el celular y en la TV (Kino también puede copiarlo solo a tus apa
 ## 3. En el celular: configura e inicia sesión
 
 1. Abre **Ajustes ▸ Ajustes de todos los perfiles ▸ Sincronización ▸ Proveedor**. Ahí aparece *Sync-Gram Cuenta*.
-   Toca su botón **Configurar**. Se abre la página del plugin con tres pasos numerados.
-2. **1. Abre my.telegram.org:** toca **Obtener api_id y api_hash** si todavía no los tienes (paso 1 de esta guía).
-3. **2. Crea una app y copia los datos:** pega tu **api_id** y tu **api_hash** y toca **Guardar**.
-   - La sección *Lo que guarda este aparato* explica que este aparato guardará una sesión de toda tu cuenta de
-     Telegram (mira [Privacidad y riesgos](#privacidad-y-riesgos)).
-4. **3. Inicia sesión con tu teléfono:** escribe **Tu número** con el código de país (por ejemplo `+57 300 1234567`) y
-   toca **Enviar código**.
-   - El estado dice *Listo: Telegram te manda el código a tu app de Telegram en otro aparato o por SMS.*
+   Toca su botón **Configurar**: se abre la pantalla propia del plugin, un paso a la vez (Kino 0.9.74 o posterior).
+2. **Paso 1, los datos de tu app de Telegram:** toca **Abrir my.telegram.org** si todavía no los tienes (paso 1 de
+   esta guía), pega tu **api_id** y tu **api_hash** en los campos de la pantalla y toca **Guardar**. Una forma
+   equivocada se marca bajo el campo antes de guardar (el api_id es un número, el api_hash 32 letras y números).
+   - La nota bajo el paso explica que este aparato guardará una sesión de toda tu cuenta de Telegram (mira
+     [Privacidad y riesgos](#privacidad-y-riesgos)).
+3. **Paso 2, inicia sesión con tu número:** escribe **Tu número** con el código de país (por ejemplo
+   `+57 300 1234567`) y toca **Enviar código**. El botón sigue apagado, y el campo muestra el error, hasta que el
+   número tenga una forma válida.
    - Casi siempre el código llega **como un mensaje de "Telegram" dentro de tu app de Telegram**, no como SMS.
    - El número se queda en este celular: nunca se sincroniza ni se envía a otro aparato.
-5. Aparecen **Código** e **Iniciar sesión**. Escribe el código y toca **Iniciar sesión**. El código se borra al usarlo.
-6. Si tu cuenta tiene **contraseña de dos pasos**, el estado lo dice: escríbela en **Contraseña de dos pasos**, toca
-   **Guardar** y luego **Confirmar la contraseña**.
-7. El estado dice *Listo: sesión iniciada. Ya puedes llevar la configuración a tu TV con Enviar configuración.* Desde
-   ahí la página del celular muestra *Conectado con tu cuenta*.
+4. **Paso 3, escribe el código:** la pantalla ahora pide solo el código. Escríbelo y toca **Iniciar sesión**. El código
+   nunca se guarda. **Usar otro número** vuelve al paso 2.
+5. Si tu cuenta tiene **contraseña de dos pasos**, la pantalla lo dice: escríbela en el campo de contraseña de Kino,
+   toca **Guardar** y luego **Confirmar la contraseña**.
+6. La pantalla dice *Sesión iniciada*. Desde ahí muestra *Conectado con tu cuenta* y **Cerrar sesión**.
+
+La pantalla se actualiza sola mientras está abierta; no hay nada que recargar.
 
 Solo ahora aparece **Enviar configuración** en la tarjeta del proveedor: lo que va a la TV es una configuración que ya
 se sabe que funciona. No hay clave que crear ni escribir: Kino crea sola la clave de sincronización.
@@ -100,12 +103,13 @@ La TV nunca te pide escribir nada. Con los dos aparatos en el mismo Wi-Fi:
    - El celular dice *Enviado. Confírmalo en el otro aparato.*
 3. La TV pregunta **"Recibido para Sync-Gram Cuenta: ¿aplicar?"** y muestra qué va a guardar (nunca los valores). Toca
    **Aplicar**.
-4. Sin tocar nada más, la página del plugin en la TV muestra un **QR** con *Escanea este código con Telegram en tu
+4. Sin tocar nada más, la pantalla del plugin en la TV muestra un **QR** con *Escanea este código con Telegram en tu
    teléfono*. En el celular abre **Telegram ▸ Ajustes ▸ Dispositivos ▸ Vincular un dispositivo** (en algunas versiones
    dice **Vincular dispositivo de escritorio**) y escanéalo.
    - Si tu cuenta tiene contraseña de dos pasos, la TV usa sola la que mandó el celular.
-   - El QR se renueva solo cada pocos segundos, y si vence aparece uno nuevo sin que hagas nada.
-5. La TV muestra *Conectado con tu cuenta*. En Telegram ▸ Ajustes ▸ Dispositivos ahora hay una segunda sesión, la
+   - El QR se renueva solo cada pocos segundos, y si vence aparece uno nuevo sin que hagas nada; si los intentos
+     automáticos se detienen, aparece **Mostrar el código QR otra vez**.
+5. La TV muestra *Conectado con tu cuenta* y **Cerrar sesión**. En Telegram ▸ Ajustes ▸ Dispositivos ahora hay una segunda sesión, la
    propia de la TV.
 
 ¿Están en redes distintas? En la pantalla de envío del celular elige **Otra red** y escribe las palabras y el código
@@ -159,7 +163,7 @@ y el código de inicio de sesión nunca salen del celular.
   sus propias copias viejas. Pero si el código del plugin o el aparato se vieran comprometidos, esa sesión podría leer
   o enviar tus mensajes.
 - **Cierra una sesión cuando quieras:** en Telegram ▸ Ajustes ▸ Dispositivos, termina la sesión de Kino de ese aparato.
-  O toca **Cerrar sesión** en la página del plugin en el celular. Los datos sincronizados en tus aparatos no se
+  O toca **Cerrar sesión** en la pantalla del plugin en el celular. Los datos sincronizados en tus aparatos no se
   pierden.
 - **¿Perdiste un aparato?** Termina su sesión enseguida en Telegram ▸ Ajustes ▸ Dispositivos.
 - **Alternativa más acotada:** [Sync-Gram](https://github.com/kinotvapp/kino-plugin-sync-gram) usa un bot de Telegram

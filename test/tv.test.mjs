@@ -6,7 +6,7 @@
 // expired or failed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cluster, device, API, blobOf } from "./harness.mjs";
+import { cluster, device, API, blobOf, shown } from "./harness.mjs";
 
 const PASSWORD = "contraseña-de-prueba 2FA";
 const RECEIVED = Object.freeze({ ...API, login_ok: "1" }); // what "Recibir configuración" leaves on the TV
@@ -28,8 +28,8 @@ test("with the received configuration and no session the TV page starts the QR l
     const st = await (await r.tv()).settingsStatus();
     assert.match(st.login_qr, /^tg:\/\/login\?token=[A-Za-z0-9_-]{43}$/);
     assert.equal(st.status, SCAN);
-    assert.ok(st.hide.includes("qr_login"), "no button while the automatic attempt runs");
-    assert.ok(!st.hide.includes("login_qr"));
+    assert.equal(st.retry, false, "no button while the automatic attempt runs");
+    assert.deepEqual(st.view.qr, [st.login_qr], "the screen draws the QR");
     assert.equal(logins(r), 1);
     // The person scans with the phone's Telegram; the next refresh signs in.
     assert.ok(r.c.account.scan());
@@ -38,7 +38,7 @@ test("with the received configuration and no session the TV page starts the QR l
     assert.match(done.status, /sesión iniciada|Conectado/);
     const after = await (await r.tv()).settingsStatus();
     assert.match(after.status, /Conectado con tu cuenta/);
-    for (const k of ["qr_login", "login_qr", "logout"]) assert.ok(after.hide.includes(k), "connected: only the status, hides " + k);
+    assert.deepEqual([after.retry, after.view.qr, after.view.buttons], [false, [], []], "connected: only the status");
     const en = await (await r.tv(RECEIVED, { lang: "en" })).settingsStatus();
     assert.match(en.status, /Connected to your account/);
   } finally { r.close(); }
@@ -88,7 +88,7 @@ test("an expired code restarts by itself while the page is open, within the budg
     const stopped = await (await r.tv()).settingsStatus();
     assert.equal(stopped.login_qr, undefined);
     assert.match(stopped.status, /El código venció: toca Iniciar sesión de Telegram con QR/);
-    assert.ok(!stopped.hide.includes("qr_login"), "the manual retry shows");
+    assert.equal(stopped.retry, true, "the manual retry shows");
     assert.equal(logins(r), 5, "never past the budget");
     // The next hour, the manual button starts a new one.
     r.tick(3600000);
@@ -108,7 +108,7 @@ test("a FLOOD_WAIT on the automatic login is recorded: nothing more is sent whil
     const n = (r.c.tg.methodIds || []).length;
     for (let i = 0; i < 3; i++) await (await r.tv()).settingsStatus();
     assert.equal((r.c.tg.methodIds || []).length, n);
-    assert.ok(!(await (await r.tv()).settingsStatus()).hide.includes("qr_login"));
+    assert.equal((await (await r.tv()).settingsStatus()).retry, true);
   } finally { r.close(); }
 });
 
@@ -122,7 +122,7 @@ test("an exhausted budget: the TV does not start a login by itself", async () =>
     const st = await (await r.tv()).settingsStatus();
     assert.equal(st.login_qr, undefined);
     assert.equal(logins(r), before);
-    assert.ok(!st.hide.includes("qr_login"));
+    assert.equal(st.retry, true);
   } finally { r.close(); }
 });
 
@@ -145,9 +145,12 @@ test("2FA: the received password is used by itself, once; a wrong one is not tri
     assert.equal(r.c.account.stats.checkPassword, 2);
     const hay = [r.d.storageDump(), r.d.logs.join("\n"), JSON.stringify([wrong, right])].join("\n");
     assert.ok(!hay.includes(PASSWORD) && !hay.includes("mala"));
-    // The TV's next action clears it.
-    const out = await (await r.tv({ ...RECEIVED, tg_password: PASSWORD })).action("qr_login");
-    assert.ok(out.clearSettings.includes("tg_password"));
+    // A screen cannot clear a password setting: the TV keeps it, sealed, device-only, and Cerrar sesión (Kino's own button
+    // on the signed-in screen) clears it.
+    const p = await r.tv({ ...RECEIVED, tg_password: PASSWORD });
+    assert.deepEqual(shown(await p.screen({ state: {} })).settings, ["logout"]);
+    const out = await p.action("logout");
+    assert.ok(out.clearSettings.includes("tg_password") && out.clearSettings.includes("login_ok"));
   } finally { r.close(); }
 });
 

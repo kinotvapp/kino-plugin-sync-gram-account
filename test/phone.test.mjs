@@ -4,8 +4,9 @@
 // code and the 2FA password never reach storage, logs, status lines or errors.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cluster, device, API, SYNC_KEY } from "./harness.mjs";
+import { cluster, device, API, SYNC_KEY, shown } from "./harness.mjs";
 import { openSession } from "../testkit/session-open.mjs";
+import { checkScreenTree } from "../sdk/screen.mjs";
 
 const PHONE = "+57 300 123 4567";
 const PASSWORD = "contraseña-de-prueba 2FA";
@@ -36,17 +37,15 @@ test("success: Enviar código, the code from Telegram, Iniciar sesión; login_ok
   try {
     const sent = await r.act("send_code");
     assert.match(sent.message, /Telegram te manda el código a tu app de Telegram en otro aparato o por SMS/);
-    assert.deepEqual(sent.clearSettings, ["login_code"]);
     assert.equal(sent.setSettings, undefined);
     const st = await (await r.run()).settingsStatus();
     assert.match(st.status, /Escribe el código que te mandó Telegram y toca Iniciar sesión/);
     const signed = await r.act("sign_in", { login_code: r.c.saved.lastCode });
     assert.match(signed.message, /Listo: sesión iniciada/);
     assert.deepEqual(signed.setSettings, { login_ok: "1" });
-    assert.deepEqual(signed.clearSettings, ["login_code"]);
     const state = openSession(r.d.base.storage.get("tg.usession"), { api_hash: API.api_hash, api_id: API.api_id, account: true });
     assert.equal(state.dcs["2"].loggedIn, true);
-    assert.match((await (await r.run()).settingsStatus()).status, /Conectado con tu cuenta/);
+    assert.match((await (await r.run()).event("open")).state.line, /Conectado con tu cuenta/);
     assert.deepEqual(r.c.saved.log.filter((e) => /sendCode|signIn/.test(e.method)).map((e) => e.method), ["sendCode", "signIn"]);
     for (const s of secrets(r)) assert.ok(!hay(r, sent, signed, st).includes(s), "leaked a secret");
   } finally { r.close(); }
@@ -58,7 +57,6 @@ test("a wrong code: the code is cleared, the sign-in can be tried again with the
     await r.act("send_code");
     const wrong = await r.act("sign_in", { login_code: "00000" });
     assert.match(wrong.message, /El código no es correcto/);
-    assert.deepEqual(wrong.clearSettings, ["login_code"]);
     assert.equal(wrong.setSettings, undefined);
     const right = await r.act("sign_in", { login_code: r.c.saved.lastCode });
     assert.deepEqual(right.setSettings, { login_ok: "1" });
@@ -151,27 +149,39 @@ test("Enviar código and Iniciar sesión are budgeted with the QR logins (5 an h
   } finally { r.close(); }
 });
 
-test("the phone's form by stage: number first, then the code, then the password, then just signed in; never the QR", async () => {
+test("the phone's screen by stage: number first, then the code, then the password, then just signed in; never the QR", async () => {
   const r = rig();
   try {
-    const hide = async () => (await (await r.run()).settingsStatus()).hide;
-    const always = ["qr_login", "login_qr", "login_ok"];
-    let h = await hide();
-    for (const k of [...always, "login_code", "sign_in", "tg_password", "check_password", "logout"]) assert.ok(h.includes(k), "signed out hides " + k);
-    for (const k of ["phone", "send_code", "api_id", "api_hash"]) assert.ok(!h.includes(k), "signed out shows " + k);
+    const view = async () => {
+      const tree = await (await r.run()).screen({ state: {} });
+      assert.deepEqual(checkScreenTree(tree, "es", undefined, { settings: undefined }).dropped, [], "Kino keeps every node of the tree");
+      return shown(tree);
+    };
+    let v = await view();
+    assert.deepEqual([v.fields, v.buttons], [["phone"], ["Enviar código"]], "signed out: the number and Enviar código");
+    assert.deepEqual(v.qr, []);
     r.c.account.setPassword(PASSWORD);
     await r.act("send_code");
-    h = await hide();
-    for (const k of ["phone", "send_code", "login_code", "sign_in"]) assert.ok(!h.includes(k), "code stage shows " + k);
-    for (const k of [...always, "tg_password", "check_password", "logout"]) assert.ok(h.includes(k), "code stage hides " + k);
+    v = await view();
+    assert.deepEqual([v.fields, v.buttons], [["code"], ["Iniciar sesión", "Usar otro número"]], "code stage: the code, Iniciar sesión, another number");
     await r.act("sign_in", { login_code: r.c.saved.lastCode });
-    h = await hide();
-    for (const k of ["tg_password", "check_password"]) assert.ok(!h.includes(k), "password stage shows " + k);
-    for (const k of [...always, "phone", "send_code", "login_code", "sign_in", "logout"]) assert.ok(h.includes(k), "password stage hides " + k);
+    v = await view();
+    assert.deepEqual([v.fields, v.buttons, v.settings], [[], [], ["tg_password", "check_password"]], "password stage: Kino's own secret field and its button");
     await r.act("check_password", { tg_password: PASSWORD });
-    h = await hide();
-    for (const k of [...always, "tg3", "phone", "send_code", "login_code", "sign_in", "tg_password", "check_password"]) assert.ok(h.includes(k), "signed in hides " + k);
-    assert.ok(!h.includes("logout"));
+    v = await view();
+    assert.deepEqual([v.fields, v.settings], [[], ["logout"]], "signed in: just Cerrar sesión");
+    assert.deepEqual(v.qr, []);
+  } finally { r.close(); }
+});
+
+test("Usar otro número drops the code that was sent: the screen asks for the number again", async () => {
+  const r = rig();
+  try {
+    await r.act("send_code");
+    const p = await r.run();
+    assert.deepEqual(shown(await p.screen({ state: {} })).fields, ["code"]);
+    await p.screenEvent({ name: "other", state: { inputs: {} } });
+    assert.deepEqual(shown(await (await r.run()).screen({ state: {} })).fields, ["phone"]);
   } finally { r.close(); }
 });
 
@@ -193,9 +203,9 @@ test("validateSettings: the number with its country code, the code digits only; 
   const r = rig();
   try {
     const p = await r.run();
-    assert.equal(await p.validateSettings({ ...API, phone: PHONE, login_code: "12345", login_ok: "1" }), null);
-    const bad = await p.validateSettings({ phone: "12ab", login_code: "12a", login_ok: "yes" });
-    assert.deepEqual(Object.keys(bad).sort(), ["login_code", "login_ok", "phone"]);
+    assert.equal(await p.validateSettings({ ...API, phone: PHONE, login_ok: "1" }), null);
+    const bad = await p.validateSettings({ phone: "12ab", login_ok: "yes" });
+    assert.deepEqual(Object.keys(bad).sort(), ["login_ok", "phone"]);
     assert.ok(!JSON.stringify(bad).includes("12ab"));
   } finally { r.close(); }
 });

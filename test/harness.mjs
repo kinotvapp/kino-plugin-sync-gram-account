@@ -83,6 +83,25 @@ export function device({ lang = "es-CO", manifest = MANIFEST } = {}) {
       for (const [name, fn] of Object.entries(plugin)) {
         if (typeof fn === "function") calls[name] = async (...args) => { const v = await fn(...JSON.parse(JSON.stringify(args))); return v === undefined ? undefined : JSON.parse(JSON.stringify(v)); };
       }
+      // The screen's events as the old form's calls, so one set of sign-in scenarios covers both: an event's answer is
+      // `{ message }` (the line it left on the screen) plus the settings a screen may write (login_ok).
+      const screenState = { inputs: { phone: values.phone, code: values.login_code } };
+      const asAnswer = (a) => {
+        const out = { message: (a && a.state && a.state.msg) || "" };
+        const cfg = (a && a.config) || {};
+        if (cfg.login_ok === "1") out.setSettings = { login_ok: "1" };
+        if (cfg.login_ok === null) out.clearSettings = ["login_ok"];
+        return out;
+      };
+      calls.event = (name, extra = {}) => calls.screenEvent({ name, state: { ...screenState, ...extra }, device: kd || "phone" });
+      const realAction = calls.action;
+      calls.action = async (key) => (["send_code", "sign_in", "qr_login"].includes(key) ? asAnswer(await calls.event(key)) : realAction(key));
+      calls.settingsStatus = async () => {
+        const a = await calls.event("tick");
+        const st = (a && a.state) || {};
+        const view = shown(await calls.screen({ state: st, device: kd || "phone" }));
+        return { status: st.line || "", ...(st.qr ? { login_qr: st.qr } : {}), retry: view.buttons.includes("Mostrar el código QR otra vez"), view };
+      };
       return calls;
     },
     storageDump() { return JSON.stringify(Object.fromEntries(base.storage.keys().map((k) => [k, base.storage.get(k)]))); },
@@ -118,4 +137,21 @@ export function blobOf(bytes, seed = 1) {
   let x = seed >>> 0 || 1;
   for (let i = 0; i < bytes; i++) { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; b[i] = x & 255; }
   return b.toString("base64");
+}
+
+/** What a screen tree shows, by kind: the settings keys of its `settings` nodes, button labels, field keys, QR values, every text. */
+export function shown(tree) {
+  const out = { settings: [], buttons: [], fields: [], qr: [], texts: [], every: null };
+  const walk = (n) => {
+    if (!n || typeof n !== "object") return;
+    if (n.type === "settings") out.settings.push(...(n.keys || []));
+    else if (n.type === "ElevatedButton" || n.type === "TextButton") out.buttons.push(n.labelText);
+    else if (n.type === "TextField") out.fields.push(n.key);
+    else if (n.type === "QrImage") out.qr.push(n.value);
+    else if (n.type === "Text") out.texts.push(n.text);
+    if (n.every) out.every = n.every;
+    for (const c of n.children || []) walk(c);
+  };
+  walk(tree);
+  return out;
 }

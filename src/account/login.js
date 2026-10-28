@@ -61,8 +61,8 @@ export function received() {
   return credentials().complete && has("syncKey") && has("login_ok");
 }
 /** The number from the `phone` setting as Telegram takes it (digits, country code first), or null. */
-function phoneDigits() {
-  const raw = String(kino.config.get("phone") ?? "").trim();
+function phoneDigits(typed) {
+  const raw = String(typed ?? kino.config.get("phone") ?? "").trim();
   if (!/^\+?[\d\s().-]+$/.test(raw)) return null;
   const d = raw.replace(/\D/g, "");
   return PHONE_DIGITS.test(d) ? d : null;
@@ -247,12 +247,12 @@ function phoneFailed(c, e) {
 }
 
 /** The send_code action: Telegram sends the sign-in code (budgeted, never retried, FLOOD_WAIT kept). */
-export async function sendPhoneCode() {
+export async function sendPhoneCode({ phone: typed } = {}) {
   const c = credentials();
   if (!socketsAvailable()) return phoneAnswer(t("status.unsupported"));
   if (!c.complete) return phoneAnswer(t("status.api_missing.phone"));
   if (hasSession(c)) return phoneAnswer(t("qr.already"));
-  const phone = phoneDigits();
+  const phone = phoneDigits(typed);
   if (!phone) return phoneAnswer(t("phone.invalid"));
   const wait = waitLeft(c);
   if (wait) return phoneAnswer(t("qr.flood", { min: minutes(wait) }));
@@ -275,16 +275,16 @@ export async function sendPhoneCode() {
 }
 
 /** The sign_in action: the code from `login_code`, used once and always cleared. */
-export async function signInWithCode() {
+export async function signInWithCode({ phone: typedPhone, code: typedCode } = {}) {
   const c = credentials();
   if (!socketsAvailable()) return phoneAnswer(t("status.unsupported"));
   if (!c.complete) return phoneAnswer(t("status.api_missing.phone"));
   if (hasSession(c)) return phoneAnswer(t("qr.already"));
   const st = mine(PHONE_KEY, c);
   if (!st || !(Number(st.until) > clock())) { remove(PHONE_KEY); return phoneAnswer(t("code.none")); }
-  const phone = phoneDigits();
+  const phone = phoneDigits(typedPhone);
   if (!phone) return phoneAnswer(t("phone.invalid"));
-  const code = String(kino.config.get("login_code") ?? "").replace(/\s/g, "");
+  const code = String(typedCode ?? kino.config.get("login_code") ?? "").replace(/\s/g, "");
   if (!/^\d{3,8}$/.test(code)) return phoneAnswer(t("code.empty"));
   const now = clock();
   try {
@@ -301,6 +301,11 @@ export async function signInWithCode() {
     }
     return phoneAnswer(phoneFailed(c, e));
   }
+}
+
+/** "Usar otro número": the code that was sent is dropped, the phone asks for the number again. */
+export function forgetCode() {
+  remove(PHONE_KEY);
 }
 
 /** The phone's lines from settingsStatus while a sign-in is under way, or {}. */

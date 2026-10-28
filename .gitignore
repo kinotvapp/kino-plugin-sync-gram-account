@@ -8,3 +8,4 @@ dist/
 .kino-cookies.json
 .kino-secrets.json
 .superpowers/
+.kino-shared.json

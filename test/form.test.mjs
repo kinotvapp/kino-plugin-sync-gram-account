@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { cluster, device, blobOf, API, SYNC_KEY, MANIFEST, ROOT } from "./harness.mjs";
+import { cluster, device, blobOf, API, SYNC_KEY, MANIFEST, ROOT, shown } from "./harness.mjs";
 import { openSession } from "../testkit/session-open.mjs";
 import { validateManifest, isStandaloneSet } from "../sdk/contract.mjs";
 import { validate } from "../sdk/validate.mjs";
@@ -15,9 +15,6 @@ import { validate } from "../sdk/validate.mjs";
 const PASSWORD = "contraseña-de-prueba 2FA";
 const VALUELESS = ["section", "status", "action", "qr", "link", "help"];
 // Kino never draws the key it makes itself (sync.generateKey): the host hides it on every device.
-const hostHidden = (s) => MANIFEST.sync.generateKey === true && s.key === MANIFEST.sync.keySecret;
-const drawnOn = (dev) => MANIFEST.settings.filter((s) => (!s.devices || s.devices.includes(dev)) && !hostHidden(s)).map((s) => s.key);
-const drawnUnder = (dev, answer) => drawnOn(dev).filter((k) => !(answer.hide || []).includes(k));
 
 /** A device and a clock the login reads through kino.now (the fake DC keeps the real one). */
 function rig({ lang = "es-CO", manifest } = {}) {
@@ -43,20 +40,22 @@ async function qrSignIn(r, values = API) {
   return { p, s1, s2, started };
 }
 
-test("the manifest: a standalone sync provider with socket and storageLarge, accepted by the kit's checks", async () => {
-  assert.deepEqual([MANIFEST.id, MANIFEST.name, MANIFEST.version, MANIFEST.apiVersion], ["sync-gram-account", "Sync-Gram Cuenta", "1.1.2", 13]);
-  assert.deepEqual(MANIFEST.capabilities, ["syncProvider", "socket", "storageLarge"]);
+test("the manifest: a standalone sync provider with a screen, socket and storageLarge, accepted by the kit's checks", async () => {
+  assert.deepEqual([MANIFEST.id, MANIFEST.name, MANIFEST.version, MANIFEST.apiVersion], ["sync-gram-account", "Sync-Gram Cuenta", "1.2.0", 14]);
+  assert.deepEqual(MANIFEST.capabilities, ["syncProvider", "socket", "storageLarge", "screen"]);
   assert.ok(isStandaloneSet(MANIFEST.capabilities));
   assert.deepEqual(MANIFEST.hosts, ["pluto.web.telegram.org", "venus.web.telegram.org", "aurora.web.telegram.org", "vesta.web.telegram.org", "flora.web.telegram.org"]);
   const r = validateManifest(JSON.stringify(MANIFEST));
   assert.equal(r.ok, true, JSON.stringify(r).slice(0, 300));
   const v = await validate(ROOT);
-  assert.equal(v.ok, true, v.problems.join("\n"));
+  assert.equal(v.ok, true, v.problems.join(String.fromCharCode(10)));
   assert.ok(v.consent.some((l) => l.danger && /podrán leerlos/.test(l.text)), JSON.stringify(v.consent));
   assert.match(MANIFEST.description, /No oficial: sin relación con Telegram/);
+  // The screen is how the plugin is set up: opened from its settings page, which then shows only that button.
+  assert.deepEqual(MANIFEST.screen, { label: "Sync-Gram Cuenta", labelEn: "Sync-Gram Account", opensFrom: ["settings"], settingsIn: "screen", settingsButton: { label: "Configurar", labelEn: "Set up" } });
   // Kino's limits: 12 settings with a value, 16 others.
   const valued = MANIFEST.settings.filter((s) => !VALUELESS.includes(s.type));
-  assert.deepEqual(valued.map((s) => s.key), ["api_id", "api_hash", "phone", "login_code", "tg_password", "syncKey", "login_ok"]);
+  assert.deepEqual(valued.map((s) => s.key), ["api_id", "api_hash", "phone", "tg_password", "syncKey", "login_ok"]);
   assert.ok(MANIFEST.settings.length - valued.length <= 16);
 });
 
@@ -67,17 +66,15 @@ test("the sync block: the key Kino makes, and the provision hands over the key, 
   });
   const of = (k) => MANIFEST.settings.find((s) => s.key === k);
   assert.deepEqual([of("syncKey").type, of("syncKey").default, of("syncKey").sync], ["password", undefined, undefined]);
-  // Device-only (never synced, never in a backup): the number, the code and the 2FA password. Only the 2FA password is
-  // provisioned (once, to the TV); the number and the code never leave the phone.
-  assert.deepEqual(MANIFEST.settings.filter((s) => s.sync === false).map((s) => s.key), ["phone", "login_code", "tg_password"]);
-  for (const k of ["login_code", "tg_password", "api_id", "api_hash"]) assert.equal(of(k).type, "password", k);
-  // The number is shown as typed (a text, nothing masked) but stays on this device: "sync": false on a text (Kino 13).
-  assert.deepEqual([of("phone").type, of("phone").sync, of("phone").hint], ["text", false, "Con código de país, por ejemplo +57 300 1234567"]);
-  // Step 3 says the code field and Iniciar sesión come after Enviar código.
-  assert.match(of("tg3").hint, /Enviar código\. Después aparecen Código e Iniciar sesión/);
-  assert.match(of("tg3").hintEn, /Send the code\. Then Code and Sign in appear/);
-  assert.ok(!MANIFEST.sync.provision.includes("phone") && !MANIFEST.sync.provision.includes("login_code"));
-  // login_ok: a text the sign-in fills (setSettings), not device-only, so the host's "what must hold a value to send"
+  // Device-only (never synced, never in a backup): the number and the 2FA password. Only the 2FA password is provisioned
+  // (once, to the TV); the number never leaves the phone. The sign-in code is not a setting at all: it lives in the screen.
+  assert.deepEqual(MANIFEST.settings.filter((s) => s.sync === false).map((s) => s.key), ["phone", "tg_password"]);
+  for (const k of ["tg_password", "api_id", "api_hash"]) assert.equal(of(k).type, "password", k);
+  // The number is a plain text (bound to the screen's field) that stays on this device.
+  assert.deepEqual([of("phone").type, of("phone").sync], ["text", false]);
+  assert.ok(!MANIFEST.sync.provision.includes("phone"));
+  assert.ok(!MANIFEST.settings.some((s) => ["login_code", "send_code", "sign_in", "qr_login", "login_qr", "status"].includes(s.key)), "the steps live in the screen, not in settings");
+  // login_ok: a text the sign-in fills (config), not device-only, so the host's "what must hold a value to send"
   // (every provision name but the device-only ones and the generated key) is exactly api_id, api_hash and login_ok.
   assert.deepEqual([of("login_ok").type, of("login_ok").sync, of("login_ok").default], ["text", undefined, undefined]);
   const deviceOnly = MANIFEST.sync.provision.filter((n) => of(n).type === "password" && of(n).sync === false);
@@ -88,46 +85,41 @@ test("the sync block: the key Kino makes, and the provision hands over the key, 
   assert.equal(validateManifest(JSON.stringify(bad)).ok, false);
 });
 
-test("the form: my.telegram.org, the api fields, what this device keeps, the phone's sign-in; the TV's QR; status", () => {
-  assert.deepEqual(MANIFEST.settings.map((s) => s.key), [
-    "tg1", "mytelegram", "tg2", "api_id", "api_hash", "scope", "tg3", "phone", "send_code", "login_code", "sign_in",
-    "tg_password", "check_password", "qr_login", "login_qr", "syncKey", "login_ok", "logout", "status",
-  ]);
-  assert.deepEqual(MANIFEST.settings.filter((s) => s.type === "section").map((s) => [s.label, s.labelEn]), [
-    ["1. Abre my.telegram.org", "1. Open my.telegram.org"],
-    ["2. Crea una app y copia los datos", "2. Create an app and copy the data"],
-    ["Lo que guarda este aparato", "What this device keeps"],
-    ["3. Inicia sesión con tu teléfono", "3. Sign in with your phone"],
-  ]);
+test("the settings that stay are the ones the screen draws through Kino's own fields: secrets and the two buttons", () => {
+  assert.deepEqual(MANIFEST.settings.map((s) => s.key), ["api_id", "api_hash", "phone", "tg_password", "check_password", "syncKey", "login_ok", "logout"]);
   const of = (k) => MANIFEST.settings.find((s) => s.key === k);
-  assert.match(of("tg3").hint, /el código que Telegram te manda \(a tu app de Telegram en otro aparato o por SMS\)/);
-  assert.match(of("tg3").hintEn, /the code Telegram sends you \(to your Telegram app on another device or by SMS\)/);
-  assert.match(of("scope").hint, /sesión de toda tu cuenta de Telegram; tu sesión de Telegram no entra en las copias de seguridad\..*solo actúa en tus Mensajes guardados.*puede hacer más.*Ajustes ▸ Dispositivos/);
-  assert.match(of("scope").hintEn, /session of your whole Telegram account; your Telegram session never goes into backups\..*only acts in your Saved Messages.*can do more.*Settings ▸ Devices/);
-  assert.deepEqual([of("send_code").label, of("send_code").labelEn, of("sign_in").label, of("sign_in").labelEn], ["Enviar código", "Send the code", "Iniciar sesión", "Sign in"]);
+  assert.deepEqual([of("check_password").type, of("logout").type], ["action", "action"]);
   assert.deepEqual([of("syncKey").hint, of("syncKey").hintEn], ["La crea Kino sola: no la escribas tú", "Kino makes it by itself: do not type it"]);
-  const link = of("mytelegram");
-  assert.deepEqual([link.type, link.label, link.labelEn, link.url, link.devices], ["link", "Obtener api_id y api_hash", "Get api_id and api_hash", "https://my.telegram.org/apps", ["phone"]]);
   assert.ok(!MANIFEST.hosts.includes("my.telegram.org"), "a link is opened by Kino, never reached by the plugin: no host");
-  assert.equal(of("login_qr").refreshMs, 5000);
 });
 
-test("per device: the phone never draws the QR, the TV draws only the QR login and the status", () => {
-  assert.deepEqual(drawnOn("tv"), ["qr_login", "login_qr", "status"]);
-  for (const k of ["qr_login", "login_qr"]) assert.deepEqual(MANIFEST.settings.find((s) => s.key === k).devices, ["tv"], k);
-  for (const s of MANIFEST.settings.filter((x) => x.type === "password")) assert.deepEqual(s.devices, ["phone"], s.key);
-  assert.deepEqual(drawnOn("phone"), MANIFEST.settings.map((s) => s.key).filter((k) => !["syncKey", "qr_login", "login_qr"].includes(k)));
-});
-
-test("login_ok is hidden on every device in every state; every hidden key is one of the manifest's", async () => {
+test("the screen's two languages: every text node carries Spanish and English", async () => {
   const r = rig();
   try {
-    const keys = new Set(MANIFEST.settings.map((s) => s.key));
-    for (const [values, dev] of [[{}, "phone"], [API, "phone"], [{}, "tv"], [{ ...API, login_ok: "1" }, "tv"]]) {
-      const st = await (await r.run(values, { device: dev })).settingsStatus();
-      assert.ok(st.hide.includes("login_ok"), dev);
-      assert.ok(st.hide.every((k) => keys.has(k)));
+    const walk = (n, out) => { if (n && n.type === "Text") out.push(n); for (const c of (n && n.children) || []) walk(c, out); return out; };
+    for (const [values, dev] of [[{}, "phone"], [API, "phone"], [{ ...API, login_ok: "1" }, "tv"]]) {
+      const texts = walk(await (await r.run(values, { device: dev })).screen({ state: {} }), []);
+      assert.ok(texts.length >= 3);
+      for (const x of texts) assert.ok(x.text && x.textEn && x.text !== x.textEn, x.text);
     }
+  } finally { r.close(); }
+});
+
+test("the screen never draws login_ok or the sync key, on any device in any state", async () => {
+  const r = rig();
+  try {
+    for (const [values, dev] of [[{}, "phone"], [API, "phone"], [{}, "tv"], [{ ...API, login_ok: "1" }, "tv"]]) {
+      const v = shown(await (await r.run(values, { device: dev })).screen({ state: {} }));
+      for (const k of ["login_ok", "syncKey"]) assert.ok(!v.settings.includes(k), dev + " " + k);
+      assert.ok(v.settings.every((k) => MANIFEST.settings.some((x) => x.key === k)));
+    }
+  } finally { r.close(); }
+});
+
+test("the screen refreshes itself while it is open: one timer, a tick", async () => {
+  const r = rig();
+  try {
+    for (const dev of ["phone", "tv"]) assert.deepEqual(shown(await (await r.run({}, { device: dev })).screen({ state: {} })).every, { ms: 4000, event: "tick" });
   } finally { r.close(); }
 });
 
@@ -172,7 +164,7 @@ test("the TV's QR login by hand: the code refreshes, the scan signs in, the sess
   } finally { r.close(); }
 });
 
-test("2FA on the TV by hand: the received password is used by Iniciar sesión de Telegram con QR and cleared after every attempt", async () => {
+test("2FA on the TV by hand: the received password is used by the QR button's attempt (a screen cannot clear a password setting: Cerrar sesión does)", async () => {
   const r = rig();
   try {
     r.c.account.setPassword(PASSWORD);
@@ -180,18 +172,16 @@ test("2FA on the TV by hand: the received password is used by Iniciar sesión de
     assert.match(s2.status, /envíala desde tu celular con Enviar configuración/);
     const wrong = await (await r.tv({ ...API, tg_password: "mala" })).action("qr_login");
     assert.match(wrong.message, /no es correcta/);
-    assert.deepEqual(wrong.clearSettings, ["tg_password"]);
     const used = await (await r.tv({ ...API, tg_password: PASSWORD })).action("qr_login");
     assert.match(used.message, /sesión iniciada/);
-    assert.deepEqual(used.clearSettings, ["tg_password"]);
     assert.equal(r.c.account.stats.checkPassword, 2);
     assert.ok(![r.d.storageDump(), r.d.logs.join("\n"), JSON.stringify([wrong, used])].join("\n").includes(PASSWORD));
   } finally { r.close(); }
   const r2 = rig();
   try {
-    // No login under way: a password is not sent anywhere, and it is cleared.
+    // No login under way: a password is not sent anywhere.
     const start = await (await r2.tv({ ...API, tg_password: PASSWORD })).action("qr_login");
-    assert.deepEqual(start.clearSettings, ["tg_password"]);
+    assert.match(start.message, /Vincular un dispositivo/);
     assert.equal(r2.c.account.stats.checkPassword, 0);
   } finally { r2.close(); }
 });

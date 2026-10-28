@@ -64,21 +64,23 @@ Install it on the phone and on the TV (Kino can also copy it to your paired devi
 ## 3. On the phone: set up and sign in
 
 1. Open **Settings ▸ Settings for all profiles ▸ Sync ▸ Provider**. *Sync-Gram Cuenta* is listed there. Tap its
-   **Set up** button. The plugin's page opens with three numbered steps.
-2. **1. Open my.telegram.org:** tap **Get api_id and api_hash** if you still need them (step 1 of this guide).
-3. **2. Create an app and copy the data:** paste your **api_id** and **api_hash** and tap **Save**.
-   - The section *What this device keeps* explains that this device will hold a session of your whole Telegram
-     account (see [Privacy and risks](#privacy-and-risks)).
-4. **3. Sign in with your phone:** type **Your number** with the country code (for example `+57 300 1234567`) and
-   tap **Send the code**.
-   - The status says *Done: Telegram sends the code to your Telegram app on another device or by SMS.*
+   **Set up** button: the plugin's own screen opens, one step at a time (Kino 0.9.74 or later).
+2. **Step 1, your Telegram app's details:** tap **Open my.telegram.org** if you still need them (step 1 of this
+   guide), then paste your **api_id** and **api_hash** in the fields on the screen and tap **Save**. A wrong shape
+   is flagged under the field before you save (the api_id is a number, the api_hash 32 letters and digits).
+   - The note under the step explains that this device will hold a session of your whole Telegram account (see
+     [Privacy and risks](#privacy-and-risks)).
+3. **Step 2, sign in with your number:** type **Your number** with the country code (for example `+57 300 1234567`) and
+   tap **Send the code**. The button stays off, and the field shows the error, until the number has a valid shape.
    - The code usually arrives **as a message from "Telegram" inside your Telegram app**, not as an SMS.
    - The number stays on this phone: it is never synced and never sent to another device.
-5. **Code** and **Sign in** appear. Type the code and tap **Sign in**. The code is erased once used.
-6. If your account has a **two-step password**, the status says so: type it in **Two-step password**, tap **Save**,
+4. **Step 3, type the code:** the screen now asks only for the code. Type it and tap **Sign in**. The code is never
+   stored. **Use another number** goes back to step 2.
+5. If your account has a **two-step password**, the screen says so: type it in Kino's password field, tap **Save**,
    then **Confirm the password**.
-7. The status says *Done: signed in. You can now take the setup to your TV with Send settings.* From now on the
-   phone's page shows *Connected to your account*.
+6. The screen says *Signed in*. From now on it shows *Connected to your account* and **Sign out**.
+
+The screen refreshes itself while it is open; there is nothing to reload.
 
 Only now does **Send settings** appear on the provider's card: what goes to the TV is a setup that is known to work.
 There is no key to create or type: Kino makes the sync key by itself.
@@ -98,12 +100,14 @@ The TV never asks you to type anything. With both devices on the same Wi-Fi:
    - The phone says *Sent. Confirm it on the other device.*
 3. The TV asks **"Received for Sync-Gram Cuenta: apply?"** and lists what it will save (never the values). Tap
    **Apply**.
-4. Without pressing anything else, the TV's plugin page shows a **QR** with *Scan this code with Telegram on your
+4. Without pressing anything else, the TV's plugin screen shows a **QR** with *Scan this code with Telegram on your
    phone*. On the phone, open **Telegram ▸ Settings ▸ Devices ▸ Link Desktop Device** (some versions say **Link a
    device**) and scan it.
    - If your account has a two-step password, the TV uses the one the phone sent, by itself.
-   - The QR renews itself every few seconds, and a new one appears by itself if it expires.
-5. The TV shows *Connected to your account*. Telegram ▸ Settings ▸ Devices now lists a second session, the TV's own.
+   - The QR renews itself every few seconds, and a new one appears by itself if it expires; if the automatic
+     attempts stop, **Show the QR code again** appears.
+5. The TV shows *Connected to your account* and **Sign out**. Telegram ▸ Settings ▸ Devices now lists a second
+   session, the TV's own.
 
 On different networks? On the phone's send screen choose **Another network** and type the words and the code the TV
 shows: the receive screen opens a temporary internet route for that.
